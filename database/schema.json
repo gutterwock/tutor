@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaptive-learning-rag-schema",
+  "title": "Adaptive Learning RAG Schema",
+  "description": "Schema for a course platform with RAG-based adaptive learning using pgvector (384-dim local embeddings). Timestamps are 13-digit epoch milliseconds. Syllabus IDs use slug format (e.g. aws-security-specialty, spanish-b2, aws-security-specialty.1, aws-security-specialty.1.1).",
+  "type": "object",
+  "properties": {
+    "syllabus": {
+      "type": "object",
+      "description": "Hierarchical course structure (course → topics → subtopics)",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+(\\.[0-9]+)*$", "description": "Slug identifier for course root (e.g. spanish-b2, aws-security-specialty)" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Course name" },
+        "description": { "type": "string", "description": "Course description" },
+        "prerequisites": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of knowledge or skills required before taking the course"
+        },
+        "exam": {
+          "type": ["object", "null"],
+          "description": "Optional exam info if this course is exam prep",
+          "properties": {
+            "exam": { "type": "string", "description": "Exam name" }
+          }
+        },
+        "checksum": { "type": ["string", "null"], "maxLength": 64, "description": "Hash of remote course content to detect changes" },
+        "embedding": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 384,
+          "maxItems": 384,
+          "description": "384-dim vector from local model (e.g. all-MiniLM-L6-v2)"
+        },
+        "topics": {
+          "type": "array",
+          "description": "Topics within the course",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9-]+\\.[0-9]+$", "description": "Topic slug (e.g. spanish-b2.1)" },
+              "name": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "description": { "type": "string" },
+              "embedding": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 384,
+                "maxItems": 384,
+                "description": "384-dim vector for semantic search"
+              },
+              "sub_topics": {
+                "type": "array",
+                "description": "Subtopics within the topic",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^[a-z0-9-]+\\.[0-9]+\\.[0-9]+$", "description": "Subtopic slug (e.g. spanish-b2.1.1)" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 500 },
+                    "embedding": {
+                      "type": "array",
+                      "items": { "type": "number" },
+                      "minItems": 384,
+                      "maxItems": 384,
+                      "description": "384-dim vector for semantic search"
+                    },
+                    "content_ids": {
+                      "type": "array",
+                      "items": { "type": "string", "format": "uuid" },
+                      "description": "UUIDs of content records relevant to this subtopic"
+                    },
+                    "objectives": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Learning objectives for this subtopic"
+                    },
+                    "prerequisites": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "List of other subtopic IDs that are prerequisites (if circular dependencies exist, use first-come-first-serve order)"
+                    },
+                    "question_ids": {
+                      "type": "array",
+                      "items": { "type": "string", "format": "uuid" },
+                      "description": "UUIDs of question records relevant to this subtopic"
+                    }
+                  },
+                  "required": ["id", "name"]
+                }
+              }
+            },
+            "required": ["id", "name"]
+          }
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "content": {
+      "type": "object",
+      "description": "Learning material tied to subtopics",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "syllabus_id": { "type": "string", "description": "FK to syllabus slug (subtopic level, e.g. spanish-b2.1.1)" },
+        "active": { "type": "boolean", "default": true, "description": "If false, content is not shown to users" },
+        "base_content": { "type": "boolean", "default": true, "description": "true = part of base course, false = generated adaptively by agent" },
+        "content_type": { "type": "string", "enum": ["text", "image", "markup", "audio", "video"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "body": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Relevant tags for the content"
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "link": { "type": "string", "format": "uri" },
+              "title": { "type": "string" }
+            },
+            "required": ["link", "title"]
+          },
+          "description": "Relevant links (e.g. image or video URLs)"
+        },
+        "embedding": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 384,
+          "maxItems": 384,
+          "description": "384-dim vector for semantic search"
+        },
+        "metadata": { "type": ["object", "null"], "description": "Arbitrary metadata (duration, source, etc.)" }
+      },
+      "required": ["id", "syllabus_id", "content_type", "title", "body"]
+    },
+    "content_view": {
+      "type": "object",
+      "description": "Tracks what content a user has seen",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "content_id": { "type": "string", "format": "uuid", "description": "FK to content" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "last_shown": { "type": "integer", "description": "13-digit epoch milliseconds" },
+        "view_count": { "type": "integer", "minimum": 1, "default": 1, "description": "Unique per (content_id, user_id)" }
+      },
+      "required": ["id", "content_id", "user_id", "last_shown", "view_count"]
+    },
+    "question": {
+      "type": "object",
+      "description": "Quiz questions tied to subtopics",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "syllabus_id": { "type": "string", "description": "FK to syllabus slug (subtopic level, e.g. spanish-b2.1.1)" },
+        "active": { "type": "boolean", "default": true, "description": "If false, question is not shown to users" },
+        "base_content": { "type": "boolean", "default": true, "description": "true = part of base course, false = generated adaptively by agent" },
+        "difficulty": { "type": "integer", "minimum": 0, "maximum": 4, "description": "0 (easiest) to 4 (hardest)" },
+        "question_type": {
+          "type": "string",
+          "enum": ["singleChoice", "multiChoice", "freeText", "ordering"]
+        },
+        "question_text": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": ["object", "null"],
+          "description": "Key-value pairs for choice-based questions (e.g. {\"a\": \"Option A\", ...}). Null for freeText.",
+          "additionalProperties": { "type": "string" }
+        },
+        "answer": {
+          "oneOf": [
+            { "type": "string", "description": "Single key for singleChoice, or sample text for freeText" },
+            { "type": "array", "items": { "type": "string" }, "description": "Ordered keys for multiChoice/ordering" }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Relevant tags for the question"
+        },
+        "embedding": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 384,
+          "maxItems": 384,
+          "description": "384-dim vector for semantic search"
+        }
+      },
+      "required": ["id", "syllabus_id", "difficulty", "question_type", "question_text", "answer"]
+    },
+    "content_progress": {
+      "type": "object",
+      "description": "Tracks subtopic unlock/completion state per user. Populated when a user enrolls in a course — one row per (user, subtopic).",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "syllabus_id": { "type": "string", "description": "FK to syllabus slug (course level, e.g. spanish-b2)" },
+        "subtopic_id": { "type": "string", "description": "FK to syllabus slug (subtopic level, e.g. spanish-b2.1.1)" },
+        "active": { "type": "boolean", "default": false, "description": "true = prerequisites completed and subtopic unlocked, false = locked" },
+        "completed": { "type": "boolean", "default": false, "description": "true if user has seen all content for the subtopic" }
+      },
+      "required": ["id", "user_id", "syllabus_id", "subtopic_id"]
+    },
+    "response": {
+      "type": "object",
+      "description": "User answers to questions — core performance tracking. Retention policy: keep only the N most recent per (user_id, question_id).",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "question_id": { "type": "string", "format": "uuid", "description": "FK to question" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "user_answer": {
+          "oneOf": [
+            { "type": "string", "description": "Single answer key for singleChoice/freeText" },
+            { "type": "array", "items": { "type": "string" }, "description": "Multiple keys for multiChoice/ordering" }
+          ]
+        },
+        "correctness": { "type": "integer", "minimum": 0, "maximum": 4, "description": "0 (completely incorrect) to 4 (completely correct)" },
+        "responded_at": { "type": "integer", "description": "13-digit epoch milliseconds" }
+      },
+      "required": ["id", "question_id", "user_id", "user_answer", "correctness", "responded_at"]
+    }
+  }
+}

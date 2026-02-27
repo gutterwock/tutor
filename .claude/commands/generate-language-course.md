@@ -1,0 +1,331 @@
+# Skill: generate-language-course
+
+## Purpose
+
+Generate a structured language course (syllabus, content, and questions) for the adaptive tutor platform, extending `generate-course` with language-learning-specific behaviors: CEFR-aware scoping, competency-based syllabus design, bilingual content, language-specific question types, and linguistic metadata tagging.
+
+## Instructions
+
+You are generating a language course for the adaptive learning platform. The user has provided: $ARGUMENTS
+
+This skill **extends** `generate-course`. Follow all base skill behavior unless explicitly overridden below. When a section below says **Override**, it replaces the corresponding base behavior. When it says **Extend**, it adds to it.
+
+Parse the input to extract:
+- **language** – the target language (e.g. "Spanish", "Japanese", "French")
+- **level** – CEFR level or equivalent (e.g. "A2", "B1", "HSK 3"). Infer from subject if present.
+- **native_language** – the learner's L1. Default to English if not specified.
+- **prerequisites** – prior level or knowledge required. Default to the level below if CEFR, or "none" if A1/beginner.
+- **exam** – whether this is for a specific language exam (DELE, DELF, JLPT, HSK, Goethe, etc.) and whether exam-only or deep learning.
+- **focus** – optional skill emphasis (e.g. "conversation", "reading", "business"). Default to balanced if not specified.
+- **media** – optional. One of:
+  - A list of specific titles the learner wants to engage with (e.g. `book: "Le Petit Prince"`, `show: "La Casa de Papel"`, `song: "Despacito"`, `film: "Spirited Away"`, `manga: "Yotsuba&!"`)
+  - `general` or omitted — organically enrich content with well-known cultural examples where the vocabulary or grammar naturally supports it
+
+If any required input is ambiguous or missing, ask the user before proceeding.
+
+---
+
+### Override: Scope Validation
+
+Before generating anything, assess whether the subject is appropriately scoped.
+
+Language courses **must** be scoped to a single CEFR level (or equivalent standard: HSK level, JLPT level, etc.). A full language without a level is always too broad.
+
+**CEFR reference for splitting suggestions:**
+| Scale | Levels |
+|---|---|
+| CEFR (European) | A1, A2, B1, B2, C1, C2 |
+| HSK (Chinese) | HSK 1–6 (or HSK 1–3, 4–6 for broader splits) |
+| JLPT (Japanese) | N5, N4, N3, N2, N1 |
+| Goethe (German) | A1, A2, B1, B2, C1, C2 |
+
+If the subject is too broad (language only, no level), prompt the user with:
+1. **Split** – suggest sub-courses per level (e.g. "Spanish" → Spanish A1, A2, B1, B2, C1, C2)
+2. **Reduce** – generate a single level they specify right now
+3. **Proceed anyway** – generate a multi-level overview course (not recommended for deep learning)
+
+If the subject includes an exam with known scope (e.g. JLPT N3), treat that as the level boundary — do not require a separate CEFR level.
+
+---
+
+### Override: Course ID
+
+Determine the course ID as a lowercase hyphenated slug from the language and level (e.g. `spanish-a2`, `japanese-n3`, `french-b1`, `mandarin-hsk3`).
+
+---
+
+### Override: Syllabus Design
+
+Language syllabi must be organized around **communicative competency areas** and **linguistic systems**, not generic topic/subtopic hierarchies.
+
+**Required top-level topic structure (adapt to the language and level):**
+
+1. **Vocabulary** – thematic vocabulary sets appropriate to the level (e.g. daily routines, work, travel)
+2. **Grammar** – grammatical structures introduced or consolidated at this level
+3. **Reading** – reading comprehension strategies and level-appropriate texts
+4. **Listening** – listening comprehension (note: content will be text-based descriptions, not audio, as multimodal is disabled)
+5. **Speaking / Oral Production** – speaking tasks, prompts, and spoken grammar patterns
+6. **Writing** – written tasks, discourse structure, written grammar patterns
+7. **Pronunciation** – phonology, stress, intonation patterns relevant to the level
+8. **Culture & Pragmatics** – cultural norms, register, politeness, idiomatic usage
+
+> Not all topics are required for every level — e.g. A1 may omit Culture & Pragmatics as a separate topic and fold it into Vocabulary. Use judgment based on the level and language.
+
+**Subtopic design rules for language:**
+- Vocabulary subtopics = thematic clusters (e.g. "Food and Drink", "Transportation", "Workplace Vocabulary")
+- Grammar subtopics = one grammatical structure per subtopic (e.g. "Present Perfect vs. Simple Past", "Subjunctive Mood — Wishes and Emotions")
+- Reading/Listening/Writing/Speaking subtopics = one task type or strategy per subtopic (e.g. "Identifying Main Idea", "Formal Email Writing")
+- Pronunciation subtopics = one phonological feature per subtopic (e.g. "Nasal Vowels", "Pitch Accent")
+- End the syllabus with an **Integration** topic containing mixed-skill and cross-topic subtopics
+
+**Exam-specific additions:**
+- If exam-focused, include a dedicated **Exam Strategies** topic at the end with subtopics for each exam section (reading, listening, writing, speaking components as applicable)
+- Model question formats on the actual exam item types (e.g. JLPT uses no free production; DELE includes oral interaction sections)
+
+---
+
+### Extend: Media Augmentation
+
+The goal is not to teach the media — it is to use familiar or interesting media as a source of authentic, memorable examples that motivate learning. The syllabus structure does not change. No dedicated media topics or subtopics are added.
+
+Media enrichment has two modes — both can apply simultaneously.
+
+**General enrichment (no specific titles, or `media: general`)**
+
+When generating vocabulary items, grammar explanations, or cultural notes, if a well-known authentic example from popular media naturally uses that word or structure, use it as one of the example sentences. This is an organic enhancement applied selectively — not a required component of every record.
+
+Criteria:
+- The word or phrase appears in a way that is natural and memorable in that context
+- The work is culturally significant and widely known in the target-language community
+- The example genuinely reinforces the learning objective
+- Do not force it — if no strong example exists, use a generic sentence
+
+Format for inline media examples (within the record's standard `body`, as one of the 2–3 example sentences):
+```
+*From [Title] ([year]): "[target-language example]" — "[English translation]"*
+```
+
+**Targeted media (specific titles provided)**
+
+Identify vocabulary and phrases from the specified work that fall within or just above the course level, then weave those items into the relevant existing vocabulary subtopics. The learner studies the word through the normal course flow; the media connection makes the example stick.
+
+- Add tagged vocabulary items (`source:media`, `media-title:[slug]`) to existing thematic subtopics where they fit naturally — e.g. a cooking vocabulary subtopic in a Spanish A2 course gets enriched with words from *Chef's Table España* if that was specified
+- If a word from the media doesn't fit any existing subtopic, include it in the closest thematic subtopic with a note that it appears in that work
+- For songs: use the themes and vocabulary in the lyrics as example sentences; do not reproduce full lyrics verbatim
+- For books: draw example sentences from the work's themes, settings, and character dialogue — not necessarily exact quotes
+- Note the register of the work where it differs from standard course register (e.g. a crime drama uses informal/slang register; a classic novel uses elevated register)
+
+---
+
+### Extend: Tags
+
+All base tags (`phase:*`) apply. In addition, apply the following language-specific tags:
+
+**Skill tags** (apply to all records — every record touches at least one skill):
+- `skill:vocabulary`, `skill:grammar`, `skill:reading`, `skill:listening`, `skill:speaking`, `skill:writing`, `skill:pronunciation`, `skill:culture`
+
+**Content type tags** (apply to content records):
+- `type:vocabulary-item` – a single lexical item with definition/translation/example
+- `type:grammar-rule` – a grammatical rule or paradigm
+- `type:conjugation-table` – a verb/adjective/noun paradigm table
+- `type:example-dialogue` – a short scripted dialogue
+- `type:reading-passage` – a short reading text (inline in the body)
+- `type:cultural-note` – pragmatic or cultural context
+- `type:pronunciation-guide` – phonetic/phonological explanation
+- `type:exam-strategy` – test-taking tip or strategy
+
+**Question focus tags** (apply to question records):
+- `focus:recall` – recall a form or meaning
+- `focus:production` – produce a form or sentence
+- `focus:comprehension` – understand a text or sentence
+- `focus:error-correction` – identify or fix an error
+- `focus:translation` – translate from L1↔L2
+- `focus:form-selection` – choose the correct grammatical form
+- `focus:register` – identify or match appropriate register
+
+**Register tags** (apply where relevant):
+- `register:formal`, `register:informal`, `register:neutral`
+
+**Frequency tags** (apply to vocabulary content):
+- `freq:high` – among the most common words at this level (top ~30%)
+- `freq:mid` – moderately common
+- `freq:low` – less common, level-appropriate but less frequent
+
+**Media tags** (apply to all records derived from or enriched with media):
+- `source:media` – record originates from or features an authentic media example
+- `media-type:tv`, `media-type:film`, `media-type:music`, `media-type:literature`, `media-type:manga`, `media-type:anime`, `media-type:podcast`
+- `media-title:[slug]` – e.g. `media-title:la-casa-de-papel`, `media-title:le-petit-prince` (lowercase hyphenated slug of the title)
+
+---
+
+### Override: Content Generation
+
+Follow the base skill's step-by-step approach (first topic checkpoint, then continue). Apply these language-specific content rules:
+
+**Vocabulary content records:**
+- Each `type:vocabulary-item` record covers **one lexical item** (word, phrase, or fixed expression)
+- Body must include:
+  - The target-language item (bolded)
+  - Pronunciation hint where helpful (IPA or phonetic approximation in parentheses)
+  - English translation / definition
+  - Grammatical category and any key inflectional info (gender for nouns, verb class, irregular forms)
+  - 2–3 example sentences in the target language with English translations
+  - Usage note or register note if relevant
+- `metadata` must include: `"word"`, `"pos"` (part of speech), `"gender"` (if applicable), `"register"`, `"cefrLevel"`
+
+**Grammar content records:**
+- Body must include:
+  - Clear statement of the rule
+  - Formation/conjugation paradigm in a Markdown table where applicable
+  - Positive, negative, and question forms where applicable
+  - Contrastive note (how this differs from a similar or related structure)
+  - 3–5 example sentences with translations
+  - Common learner errors / pitfalls
+- `metadata` must include: `"structureName"`, `"cefrLevel"`
+
+**Reading/Listening content records:**
+- Include an inline passage (150–400 words for reading; describe a spoken scenario/transcript for listening)
+- Follow with comprehension focus notes (what the learner should notice)
+- `metadata` must include: `"wordCount"` (for reading), `"textType"` (e.g. `"email"`, `"news"`, `"conversation"`)
+
+**Pronunciation content records:**
+- Describe the sound or pattern in plain language
+- Provide minimal pairs or contrastive examples
+- Include a simple production drill sequence (e.g. isolated sound → syllable → word → sentence)
+
+**Cultural/Pragmatics content records:**
+- Situate the cultural point in a real scenario
+- Compare with English/L1 norms where helpful
+- Include a short example dialogue showing the cultural point in action
+
+**Bilingual consistency rule:** Every content record body that contains target-language text must also include the English translation inline, not in a separate record. The learner should never be left guessing meaning.
+
+---
+
+### Override: Question Generation
+
+Follow the base skill's step-by-step approach. Apply these language-specific question rules:
+
+**Language question type mapping by phase:**
+
+| Phase | Preferred Question Types | Focus |
+|---|---|---|
+| atomic | singleChoice (translation, definition, form identification), freeText (produce the form/word) | `focus:recall`, `focus:translation`, `focus:form-selection` |
+| complex | singleChoice (grammar application, error correction, register matching), freeText (sentence-level production), ordering (reconstruct a sentence) | `focus:production`, `focus:error-correction`, `focus:comprehension` |
+| integration | singleChoice with a reading passage (comprehension), freeText (paragraph production, dialogue completion), multiChoice (identify all correct uses) | `focus:comprehension`, `focus:production`, `focus:register` |
+
+**Mandatory question variety per subtopic:**
+- Every vocabulary subtopic must include at least: L2→L1 translation, L1→L2 translation, fill-in-blank in a sentence, and a register/usage question
+- Every grammar subtopic must include at least: form identification, correct-form selection, error correction, and a sentence-production freeText
+- Integration subtopics must include at least one passage-based comprehension question
+
+**Language-specific question formats:**
+
+*Translation (singleChoice):*
+```json
+{
+  "question_text": "What does '**hablar**' mean in English?",
+  "options": { "a": "to listen", "b": "to speak", "c": "to write", "d": "to read" },
+  "answer": "b"
+}
+```
+
+*Fill-in-the-blank (freeText):*
+```json
+{
+  "question_type": "freeText",
+  "question_text": "Complete the sentence with the correct form of 'hablar': 'Nosotros _____ español todos los días.'",
+  "answer": "hablamos"
+}
+```
+
+*Error correction (singleChoice):*
+```json
+{
+  "question_text": "Which sentence contains an error?\na) Ella habla español.\nb) Ella hablo español.\nc) Ella habla inglés.\nd) Nosotros hablamos.",
+  "answer": "b"
+}
+```
+
+*Sentence reconstruction (ordering):*
+```json
+{
+  "question_type": "ordering",
+  "question_text": "Put the words in the correct order to form a sentence:",
+  "options": { "a": "español", "b": "hablo", "c": "yo", "d": "bien" },
+  "answer": ["c", "b", "a", "d"]
+}
+```
+
+*Passage comprehension (singleChoice with inline text):*
+```json
+{
+  "question_text": "Read the following and answer:\n\n'María va al mercado todos los sábados. Compra frutas, verduras y a veces flores para su casa.'\n\nWhy does María go to the market?",
+  "options": { "a": "To buy clothes", "b": "To buy food and flowers", "c": "To meet friends", "d": "To sell produce" },
+  "answer": "b"
+}
+```
+
+**Distractor quality rule:** singleChoice distractors for language questions must be plausible — use related vocabulary, common conjugation errors, or near-synonyms. Never use obviously wrong distractors.
+
+---
+
+Vocabulary content records should additionally include:
+```json
+{
+  "word": "hablar",
+  "pos": "verb",
+  "gender": null,
+  "register": "neutral",
+  "ipa": "/aˈblaɾ/"
+}
+```
+
+---
+
+### Extend: Distribution Targets
+
+In addition to base distribution targets (3–5 content records per phase per subtopic), apply:
+
+- **Vocabulary subtopics**: target 8–15 vocabulary items in `phase:atomic` (each `type:vocabulary-item` is one record), plus complex and integration records for usage in context
+- **Grammar subtopics**: target 1–2 rule/paradigm records in `phase:atomic`, 3–5 example/application records in `phase:complex`, 2–3 cross-structure comparison records in `phase:integration`
+- **Questions**: aim for 10–20 questions per vocabulary subtopic; 8–15 per grammar subtopic — language retention requires higher question volume than most subjects
+
+---
+
+### Constraints
+
+All base constraints apply, plus:
+
+- Never omit translations — every target-language string in a content body must have an inline English (or L1) translation
+- Do not generate audio content — describe listening content as transcripts or spoken scenario descriptions (`content_type: "text"` only)
+- Do not invent grammar rules — use standard, well-attested linguistic descriptions for the target language
+- Do not generate IPA for languages where IPA transcription would be unreliable or where a simpler phonetic system is standard (e.g. for Chinese, use pinyin; for Japanese, use romaji alongside kana)
+- All example sentences must be grammatically correct in the target language
+- Register-mark all example sentences and vocabulary items — never leave register ambiguous
+- For exam-focused courses, all integration questions must match the item format of the target exam (e.g. JLPT uses only singleChoice; DELE writing uses freeText with extended rubric hints in the `answer` field)
+- Media enrichment does not add topics, subtopics, or dedicated content records for studying the work itself — it only enriches examples within standard records
+- Do not reproduce song lyrics verbatim; use themes and vocabulary to construct original example sentences
+- If a specified work is significantly above the course level, note this in the vocabulary item's body (e.g. "This word appears in [Title], which is aimed at [higher level] learners — it's a useful preview") but still include it if the word itself is level-appropriate
+- Never fabricate quotes attributed to a specific work — if the exact wording is uncertain, write an original sentence inspired by the work's themes and omit the attribution
+
+---
+
+## Examples
+
+```
+/generate-language-course Spanish A2, prerequisites: Spanish A1, native language: English
+/generate-language-course Japanese N3, exam: JLPT N3, focus: reading and grammar
+/generate-language-course French B1, prerequisites: French A2, exam: DELF B1
+/generate-language-course Mandarin HSK 2, native language: English, focus: conversation
+/generate-language-course German A1, no prerequisites, native language: English
+
+# General media enrichment (weave in well-known cultural examples organically)
+/generate-language-course Spanish A2, media: general
+
+# Targeted media (enrich existing vocabulary subtopics with words/phrases from these works)
+/generate-language-course Spanish B1, media: show "La Casa de Papel", film "Pan's Labyrinth"
+/generate-language-course French A2, media: book "Le Petit Prince"
+/generate-language-course Japanese N4, media: anime "My Neighbor Totoro", manga "Yotsuba&!"
+/generate-language-course Italian A2, media: song "Volare", film "Cinema Paradiso"
+```

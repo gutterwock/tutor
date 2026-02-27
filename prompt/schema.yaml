@@ -1,0 +1,89 @@
+# Adaptive Learning RAG Schema
+# Syllabus IDs: course root is a slug (e.g. spanish-b2), children use numeric hierarchy (e.g. spanish-b2.1, spanish-b2.1.1). Other IDs are UUIDs.
+# Embeddings are 384-dim vectors (e.g. all-MiniLM-L6-v2).
+# Timestamps are 13-digit epoch milliseconds.
+
+syllabus:
+  id: spanish-b2 # slug identifier, e.g. spanish-b2, aws-sec-cert
+  parent_id: null # FK to parent syllabus id (null for course root, e.g. spanish-b2.1 has parent spanish-b2)
+  level: course # course, topic, or subtopic
+  name: "Course Name"
+  prerequisites: ["other course", "some skill proficiency"] # list of knowledge or skills required before taking the course
+  description: "Course description goes here"
+  exam: # optional, if this course is exam prep
+    exam: "Exam Name"
+  sort_order: 1 # integer for ordering siblings within a parent
+  checksum: "sha256-abc123..." # hash of remote course content to detect changes
+  embedding: [] # 384-dim vector for semantic search
+  topics:
+  - id: spanish-b2.1 # slug.number hierarchy
+    name: "Topic 1"
+    description: "Topic 1 description goes here"
+    embedding: [] # 384-dim vector for semantic search
+    sub_topics:
+    - id: spanish-b2.1.1
+      name: "Greetings and Introductions"
+      embedding: [] # 384-dim vector for semantic search
+      content_ids: ["uuid-1", "uuid-2", "uuid-3"] # list of content UUIDs relevant to this subtopic
+      objectives: ["Objective 1", "Objective 2"] # learning objectives for this subtopic
+      prerequisites: [] # list of other subtopic ids that are prerequisites for this subtopic if possible (if there are circular dependencies, use first-come-first-serve to determine order)
+      question_ids: ["uuid-1", "uuid-2", "uuid-3"] # list of question UUIDs relevant to this subtopic
+
+content:
+  id: "uuid"
+  syllabus_id: "spanish-b2.1.1" # FK to syllabus slug
+  active: true # default to true, if false, it will not be shown to users
+  base_content: true # true = part of base course, false = generated adaptively by agent
+  content_type: text # text, image, markup, audio, video
+  title: "Content Title"
+  body: "Full content body text"
+  tags: ["some topic"] # relevant tags for the content
+  links: # relevant links for the content if truly necessary, e.g. an image or video
+    - link: "https://example.com/resource"
+      title: "Some Content"
+  metadata: {} # arbitrary metadata (duration, source, etc.)
+  embedding: [] # 384-dim vector for semantic search
+
+contentProgress:
+  id: "uuid"
+  user_id: "uuid"
+  syllabus_id: "spanish-b2" # FK to syllabus slug
+  subtopic_id: "spanish-b2.1.1" # FK to subtopic slug
+  active: true # true = all prerequisites completed and subtopic unlocked, false = locked until prerequisites are completed. Default to true if no prerequisites and false otherwise
+  completed: false # true if user has seen all content for the subtopic, false otherwise
+
+contentView:
+  id: "uuid"
+  content_id: "uuid" # FK to content
+  user_id: "uuid"
+  last_shown: 1704067200000
+  view_count: 1 # default 1, unique per (contentId, userId)
+
+question:
+  id: "uuid"
+  syllabus_id: "spanish-b2.1.1" # FK to syllabus slug
+  active: true # default to true, if false, it will not be shown to users
+  base_content: true # true = part of base course, false = generated adaptively by agent
+  difficulty: 3 # 0-4, 4 being most difficult, 0 being easiest
+  question_type: singleChoice # singleChoice, multiChoice, freeText, ordering
+  question_text: "What is this?"
+  options: # for singleChoice, multiChoice, ordering (null for freeText)
+    a: "Option A"
+    b: "Option B"
+    c: "Option C"
+    d: "Option D"
+  answer: "a" # for singleChoice (JSONB in DB)
+  # answer: ["a", "c"] # for multiChoice, ordering
+  # answer: "Something" # for freeText, sample correct response to compare with user response
+  tags: [] # relevant tags for the question
+  embedding: [] # 384-dim vector for semantic search
+
+response:
+  # Retention policy: keep only the N most recent responses per (userId, questionId).
+  # This bounds table size for fast aggregation and ensures performance reflects recent ability.
+  id: "uuid"
+  question_id: "uuid" # FK to question
+  user_id: "uuid"
+  user_answer: "a" # JSONB — string for singleChoice/freeText, array for multiChoice/ordering
+  correctness: 4 # 0-4, 4 being completely correct, 0 being completely incorrect
+  responded_at: 1704067200000

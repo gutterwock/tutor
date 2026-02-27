@@ -1,0 +1,10 @@
+{
+  "name": "tutor-app",
+  "version": "1.0.0",
+  "description": "tutor.ai CLI",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "license": "ISC"
+}

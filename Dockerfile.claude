@@ -1,0 +1,12 @@
+FROM alpine:3.18
+
+RUN apk update && \
+    apk add --no-cache nodejs npm libgcc libstdc++ ripgrep curl git bash python3 py3-pip
+
+ENV USE_BUILTIN_RIPGREP=0
+
+RUN npm install -g @anthropic-ai/claude-code
+
+WORKDIR /project
+
+ENTRYPOINT ["claude"]

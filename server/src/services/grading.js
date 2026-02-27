@@ -1,0 +1,100 @@
+/**
+ * Deterministic grading for singleChoice, multiChoice, and ordering questions.
+ * freeText AI grading via gradeFreeText (calls the AI service).
+ *
+ * Used by the response controller, the cron, and the grade-ai endpoint.
+ */
+
+const { callAI } = require("./ai");
+
+/**
+ * Grade a freeText response via AI. Returns 0–4.
+ */
+async function gradeFreeText(questionText, expectedAnswer, userAnswer) {
+	const prompt =
+		`You are grading a student's free-text response to a quiz question.\n` +
+		`Return ONLY a JSON object with a single key "correctness" set to an integer 0–4:\n` +
+		`  0 = completely wrong or blank\n` +
+		`  1 = mostly wrong with minor correct elements\n` +
+		`  2 = partially correct\n` +
+		`  3 = mostly correct with minor issues\n` +
+		`  4 = fully correct\n\n` +
+		`Question: ${questionText}\n` +
+		`Expected answer: ${JSON.stringify(expectedAnswer)}\n` +
+		`Student response: ${JSON.stringify(userAnswer)}\n\n` +
+		`Respond with JSON only. Example: {"correctness": 3}`;
+
+	const raw = await callAI(prompt);
+	const match = raw.match(/"correctness"\s*:\s*([0-4])/);
+	if (!match) {
+		console.warn(`[grading] unparseable AI response: ${raw.slice(0, 120)}`);
+		return 0;
+	}
+	return Math.max(0, Math.min(4, parseInt(match[1], 10)));
+}
+
+function gradeSingleChoice(userAnswer, correctAnswer) {
+	const u = String(userAnswer ?? "").trim().toLowerCase();
+	const c = String(correctAnswer ?? "").trim().toLowerCase();
+	return u === c ? 4 : 0;
+}
+
+function gradeMultiChoice(userAnswer, correctAnswer) {
+	const user    = toStringSet(userAnswer);
+	const correct = toStringSet(correctAnswer);
+	if (correct.size === 0) return 0;
+
+	let hits = 0;
+	for (const v of user) {
+		if (correct.has(v)) hits++;
+	}
+
+	const ratio = hits / correct.size;
+	if (ratio >= 1.0)  return 4;
+	if (ratio >= 0.75) return 3;
+	if (ratio >= 0.5)  return 2;
+	if (ratio > 0)     return 1;
+	return 0;
+}
+
+function gradeOrdering(userAnswer, expectedAnswer) {
+	const user     = toStringArray(userAnswer);
+	const expected = toStringArray(expectedAnswer);
+
+	if (user.length === 0) return 0;
+	if (JSON.stringify(user) === JSON.stringify(expected)) return 4;
+
+	let correct = 0;
+	for (let i = 0; i < Math.min(user.length, expected.length); i++) {
+		if (user[i].toLowerCase() === expected[i].toLowerCase()) correct++;
+	}
+
+	const ratio = correct / expected.length;
+	if (ratio >= 0.75) return 3;
+	if (ratio >= 0.5)  return 2;
+	if (ratio > 0)     return 1;
+	return 0;
+}
+
+/**
+ * Grade a response deterministically.
+ * Returns null for freeText (needs AI/human assessment).
+ */
+function gradeResponse(questionType, userAnswer, correctAnswer) {
+	if (questionType === "singleChoice") return gradeSingleChoice(userAnswer, correctAnswer);
+	if (questionType === "multiChoice")  return gradeMultiChoice(userAnswer, correctAnswer);
+	if (questionType === "ordering")     return gradeOrdering(userAnswer, correctAnswer);
+	return null; // freeText
+}
+
+function toStringSet(val) {
+	return new Set(
+		(Array.isArray(val) ? val : [val]).map((v) => String(v ?? "").trim().toLowerCase())
+	);
+}
+
+function toStringArray(val) {
+	return (Array.isArray(val) ? val : [val]).map((v) => String(v ?? "").trim());
+}
+
+module.exports = { gradeSingleChoice, gradeMultiChoice, gradeOrdering, gradeResponse, gradeFreeText };
