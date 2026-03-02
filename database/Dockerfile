@@ -1,4 +1,4 @@
-FROM pgvector/pgvector:0.8.0-pg17
+FROM docker.io/pgvector/pgvector:0.8.0-pg17
 
 COPY schema.sql /docker-entrypoint-initdb.d/01-schema.sql
 

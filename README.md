@@ -57,6 +57,13 @@ npm start        # port 3000 (or $PORT)
 npm run dev      # with nodemon
 ```
 
+OR
+
+```bash
+podman build -t tutor-server ./server
+podman run --name tutor-server --network host tutor-server
+```
+
 ### 3. Load course data
 
 ```bash

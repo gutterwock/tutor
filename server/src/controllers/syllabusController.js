@@ -17,7 +17,7 @@ function computeChecksum(name, description, prerequisites, exam) {
 
 /**
  * POST /syllabus/upload
- * Body: syllabus.json format (nested course object with topics → subTopics)
+ * Body: syllabus.json format (nested course object with topics → sub_topics)
  */
 async function uploadSyllabus(req, res) {
 	try {
@@ -86,7 +86,7 @@ async function uploadSyllabus(req, res) {
 				embedding: topicEmbedding,
 			});
 
-			const subTopics = topic.subTopics ?? [];
+			const subTopics = topic.sub_topics ?? [];
 			for (let si = 0; si < subTopics.length; si++) {
 				const sub = subTopics[si];
 				const subChecksum = computeChecksum(
