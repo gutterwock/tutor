@@ -19,7 +19,7 @@ app.use(hpp());
 app.use(
 	rateLimit({
 		windowMs: 15 * 60 * 1000, // 15 minutes
-		max: 100,
+		max: 1_000_00,
 		standardHeaders: true,
 		legacyHeaders: false,
 	})

@@ -193,7 +193,7 @@ async function askQuestion(data) {
 		console.log(formatOptions(data.options) + "\n");
 		const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim().toLowerCase();
 		userAnswer = input.split(",").map((s) => s.trim()).filter(Boolean);
-		const expected = (Array.isArray(data.answer) ? data.answer : [data.answer]).map(String);
+		const expected = (Array.isArray(data.answer) ? data.answer : [data.answer]).map((v) => String(v).trim().toLowerCase());
 		const isCorrect =
 			JSON.stringify([...userAnswer].sort()) === JSON.stringify([...expected].sort());
 		correctness = isCorrect ? 4 : 0;
@@ -294,9 +294,9 @@ async function studySession(userId, settings) {
 			hr();
 			let { correctness, userAnswer } = await askQuestion(data);
 			// Submit response before dequeuing so a crash between the two leaves the item in queue
-			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true)
+			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true) and ordering (deterministic)
 			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
-			if (data.question_type !== "freeText") submitBody.correctness = correctness;
+			if (data.question_type === "singleChoice" || data.question_type === "multiChoice") submitBody.correctness = correctness;
 			const submitted = await api("POST", "/responses", submitBody);
 
 			if (submitted.needs_grading) {
