@@ -11,6 +11,20 @@ const { callAI } = require("./ai");
 const { generateEmbedding, pgVector } = require("./embedding");
 
 async function generateForSubtopic(userId, subtopicId) {
+	// Guard: only generate once per subtopic — skip if adaptive items already exist
+	const existingRes = await pool.query(
+		`SELECT 1 FROM (
+		   SELECT 1 FROM content  WHERE syllabus_id = $1 AND base_content = false
+		   UNION ALL
+		   SELECT 1 FROM question WHERE syllabus_id = $1 AND base_content = false
+		 ) t LIMIT 1`,
+		[subtopicId]
+	);
+	if (existingRes.rows.length) {
+		console.log(`  [adaptive] ${subtopicId}: already generated, skipping`);
+		return { contentIds: [], questionIds: [], skipped: true };
+	}
+
 	// 1. Subtopic context
 	const ctxRes = await pool.query(
 		`SELECT s.name AS subtopic_name, t.name AS topic_name, c.name AS course_name
@@ -114,7 +128,7 @@ async function generateForSubtopic(userId, subtopicId) {
 	const questionIds = [];
 	for (const q of parsed.questions ?? []) {
 		if (!q.question_text || q.answer === undefined) continue;
-		if (!["singleChoice", "multiChoice", "ordering", "freeText"].includes(q.question_type)) continue;
+		if (!["singleChoice", "multiChoice", "ordering", "freeText", "exactMatch"].includes(q.question_type)) continue;
 		const diff = Math.max(0, Math.min(4, parseInt(q.difficulty ?? 0, 10)));
 		const embedding = pgVector(await generateEmbedding(q.question_text));
 		const r = await pool.query(

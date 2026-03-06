@@ -113,4 +113,51 @@ async function generateAdaptive(req, res) {
 	}
 }
 
-module.exports = { getProgress, getEnrollments, getStruggling, generateAdaptive };
+/**
+ * GET /course-progress?user_id=&course_id=
+ * Returns the full topic/subtopic tree for a course with per-subtopic status:
+ *   "completed" | "active" | "locked"
+ */
+async function getCourseProgress(req, res) {
+	try {
+		const { user_id, course_id } = req.query;
+		if (!user_id || !course_id) {
+			return res.status(400).json({ error: "Missing required query params: user_id, course_id" });
+		}
+
+		const result = await pool.query(
+			`SELECT t.id   AS topic_id,   t.name AS topic_name,   t.sort_order AS topic_order,
+			        s.id   AS subtopic_id, s.name AS subtopic_name, s.sort_order AS subtopic_order,
+			        COALESCE(cp.active, false)    AS active,
+			        COALESCE(cp.completed, false) AS completed
+			 FROM syllabus t
+			 JOIN syllabus s ON s.parent_id = t.id AND s.level = 'subtopic'
+			 LEFT JOIN content_progress cp ON cp.subtopic_id = s.id AND cp.user_id = $2
+			 WHERE t.parent_id = $1 AND t.level = 'topic'
+			 ORDER BY t.sort_order, s.sort_order`,
+			[course_id, user_id]
+		);
+
+		const topicMap = new Map();
+		for (const row of result.rows) {
+			if (!topicMap.has(row.topic_id)) {
+				topicMap.set(row.topic_id, { id: row.topic_id, name: row.topic_name, subtopics: [] });
+			}
+			const status = row.completed ? "completed" : row.active ? "active" : "locked";
+			topicMap.get(row.topic_id).subtopics.push({
+				id: row.subtopic_id, name: row.subtopic_name, status,
+			});
+		}
+
+		const topics = [...topicMap.values()];
+		const all = topics.flatMap((t) => t.subtopics);
+		const completed = all.filter((s) => s.status === "completed").length;
+
+		return res.json({ course_id, completed, total: all.length, topics });
+	} catch (err) {
+		console.error("getCourseProgress error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+module.exports = { getProgress, getEnrollments, getStruggling, generateAdaptive, getCourseProgress };

@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 -- Enums
 CREATE TYPE syllabus_level AS ENUM ('course', 'topic', 'subtopic');
 CREATE TYPE content_type   AS ENUM ('text', 'image', 'markup', 'audio', 'video');
-CREATE TYPE question_type  AS ENUM ('singleChoice', 'multiChoice', 'freeText', 'ordering');
+CREATE TYPE question_type  AS ENUM ('singleChoice', 'multiChoice', 'freeText', 'ordering', 'exactMatch');
 
 -- =============================================================================
 -- Tables
@@ -75,10 +75,13 @@ CREATE TABLE question (
     difficulty    SMALLINT NOT NULL CHECK (difficulty BETWEEN 0 AND 4),
     question_type question_type NOT NULL,
     question_text TEXT NOT NULL,
-    options       JSONB,
-    answer        JSONB NOT NULL,
-    tags          TEXT[] DEFAULT '{}',
-    embedding     vector(384)
+    options        JSONB,
+    answer         JSONB NOT NULL,
+    explanation    TEXT,                -- optional: shown after answering; for counterintuitive answers only
+    tags           TEXT[] DEFAULT '{}',
+    content_ids    UUID[] DEFAULT '{}', -- content blocks that must be viewed before this question is shown; [] = ungated
+    case_sensitive BOOLEAN NOT NULL DEFAULT false,  -- exactMatch only
+    embedding      vector(384)
 );
 
 -- Response: user answers to questions
@@ -125,6 +128,7 @@ CREATE INDEX idx_content_progress_active   ON content_progress(active);
 CREATE INDEX idx_syllabus_prerequisites ON syllabus  USING gin (prerequisites);
 CREATE INDEX idx_content_tags           ON content   USING gin (tags);
 CREATE INDEX idx_question_tags          ON question  USING gin (tags);
+CREATE INDEX idx_question_content_ids   ON question  USING gin (content_ids);
 
 -- =============================================================================
 -- Study Queue

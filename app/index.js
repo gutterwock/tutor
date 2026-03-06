@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
 	interleave_courses: true,   // mix subtopics from all enrolled courses in one session
 	interleave_subtopics: true, // study all active subtopics per session (vs. one at a time)
 	disabled_courses: [],       // course IDs temporarily excluded from study sessions
+	course_weights: {},         // course ID → integer multiplier (default 1, omitted if 1)
 };
 
 // ── persistence ───────────────────────────────────────────────────────────────
@@ -60,6 +61,12 @@ const on = (v) => (v ? "ON " : "OFF");
 const hr = () => console.log("\n" + "─".repeat(60));
 const clear = () => process.stdout.write("\x1Bc");
 
+function progressBar(completed, total, width = 20) {
+	if (total === 0) return "░".repeat(width);
+	const filled = Math.round((completed / total) * width);
+	return "▓".repeat(filled) + "░".repeat(width - filled);
+}
+
 // ── settings menu ─────────────────────────────────────────────────────────────
 
 async function settingsMenu(settings) {
@@ -94,17 +101,78 @@ async function enrollFlow(userId) {
 	console.log("\nAvailable courses:\n");
 	allCourses.forEach((c, i) => console.log(`  ${i + 1}.  ${c.name}`));
 
-	const input = await ask("\nEnter number to enroll (or Enter to cancel): ");
+	const input = await ask("\nEnter number(s) to enroll (space-separated, or Enter to cancel): ");
 	if (!input.trim()) return;
-	const idx = parseInt(input, 10) - 1;
-	if (isNaN(idx) || idx < 0 || idx >= allCourses.length) {
-		console.log("Invalid selection.");
+
+	const indices = input.trim().split(/\s+/).map((s) => parseInt(s, 10) - 1);
+	const invalid = indices.filter((i) => isNaN(i) || i < 0 || i >= allCourses.length);
+	if (invalid.length) {
+		console.log("Invalid selection(s).");
 		return;
 	}
 
-	const course = allCourses[idx];
-	const result = await api("POST", "/syllabus/enroll", { user_id: userId, course_id: course.id });
-	console.log(`\nEnrolled in "${course.name}" — ${result.enrolled} subtopic(s) created.`);
+	for (const idx of indices) {
+		const course = allCourses[idx];
+		const result = await api("POST", "/syllabus/enroll", { user_id: userId, course_id: course.id });
+		console.log(`\nEnrolled in "${course.name}" — ${result.enrolled} subtopic(s) created.`);
+	}
+}
+
+async function showCourseProgress(userId, course, settings) {
+	while (true) {
+		clear();
+		const progress = await api(
+			"GET",
+			`/course-progress?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`
+		);
+
+		console.log(`\n  ${course.name}  (${progress.completed} / ${progress.total})\n`);
+		hr();
+
+		for (const topic of progress.topics) {
+			console.log(`\n  ${topic.name}`);
+			for (const sub of topic.subtopics) {
+				const icon = sub.status === "completed" ? "✓" : sub.status === "active" ? "→" : " ";
+				console.log(`    ${icon}  ${sub.name}`);
+			}
+		}
+
+		const paused = settings.disabled_courses.includes(course.id);
+		const weight = settings.course_weights[course.id] ?? 1;
+		console.log(`\n  p.  ${paused ? "Resume" : "Pause"} this course`);
+		console.log(`  w.  Set weight  (currently ${weight}×)`);
+		console.log("  b.  Back");
+
+		const input = (await ask("\n> ")).trim().toLowerCase();
+		if (input === "b" || input === "") return;
+		if (input === "p") {
+			const i = settings.disabled_courses.indexOf(course.id);
+			if (i >= 0) {
+				settings.disabled_courses.splice(i, 1);
+				console.log(`\n  "${course.name}" resumed.`);
+			} else {
+				settings.disabled_courses.push(course.id);
+				console.log(`\n  "${course.name}" paused.`);
+			}
+			saveSettings(settings);
+			await pause();
+		} else if (input === "w") {
+			const raw = (await ask("  Weight (1–5, default 1): ")).trim();
+			const w = parseInt(raw, 10);
+			if (!isNaN(w) && w >= 1 && w <= 5) {
+				if (w === 1) {
+					delete settings.course_weights[course.id];
+				} else {
+					settings.course_weights[course.id] = w;
+				}
+				saveSettings(settings);
+				console.log(`\n  Weight set to ${w}×.`);
+			} else {
+				console.log("\n  Invalid — enter a number between 1 and 5.");
+			}
+			await pause();
+		}
+	}
 }
 
 async function manageCoursesMenu(userId, settings) {
@@ -117,11 +185,23 @@ async function manageCoursesMenu(userId, settings) {
 		if (enrolled.length === 0) {
 			console.log("  Not enrolled in any courses yet.\n");
 		} else {
+			const progresses = await Promise.all(
+				enrolled.map((c) =>
+					api("GET", `/course-progress?user_id=${userId}&course_id=${encodeURIComponent(c.id)}`)
+						.catch(() => ({ completed: 0, total: 0 }))
+				)
+			);
+
 			enrolled.forEach((c, i) => {
 				const paused = settings.disabled_courses.includes(c.id);
+				const { completed, total } = progresses[i];
+				const bar  = progressBar(completed, total);
+				const frac = `${completed} / ${total}`;
 				console.log(`  ${i + 1}.  [${paused ? "paused" : "active"}]  ${c.name}`);
+				console.log(`       ${bar}  ${frac}`);
 			});
-			console.log("\n  Select a number to pause/resume that course.");
+
+			console.log("\n  Select a number to view details.");
 		}
 
 		console.log("\n  e.  Enroll in a new course");
@@ -136,17 +216,7 @@ async function manageCoursesMenu(userId, settings) {
 		} else {
 			const idx = parseInt(input, 10) - 1;
 			if (!isNaN(idx) && idx >= 0 && idx < enrolled.length) {
-				const courseId = enrolled[idx].id;
-				const i = settings.disabled_courses.indexOf(courseId);
-				if (i >= 0) {
-					settings.disabled_courses.splice(i, 1);
-					console.log(`\n  "${enrolled[idx].name}" resumed.`);
-				} else {
-					settings.disabled_courses.push(courseId);
-					console.log(`\n  "${enrolled[idx].name}" paused.`);
-				}
-				saveSettings(settings);
-				await pause();
+				await showCourseProgress(userId, enrolled[idx], settings);
 			}
 		}
 	}
@@ -161,7 +231,7 @@ function formatOptions(options) {
 
 /** Display a content item. Returns after the user presses Enter. */
 async function showContent(data) {
-	console.log(`\n  ${data.title}\n`);
+	console.log(`\n\n\n  ${data.title}\n`);
 	hr();
 	console.log(data.body);
 	if (Array.isArray(data.links) && data.links.length) {
@@ -176,7 +246,7 @@ async function showContent(data) {
  * Grading logic is identical to the previous quizSubtopic function.
  */
 async function askQuestion(data) {
-	console.log(`\n${data.question_text}\n`);
+	console.log(`\n\n\n${data.question_text}\n`);
 
 	let userAnswer;
 	let correctness = 0;
@@ -188,6 +258,7 @@ async function askQuestion(data) {
 		const isCorrect = input === String(data.answer).toLowerCase();
 		correctness = isCorrect ? 4 : 0;
 		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — answer: ${data.answer}`);
+		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "multiChoice") {
 		console.log(formatOptions(data.options) + "\n");
@@ -198,12 +269,25 @@ async function askQuestion(data) {
 			JSON.stringify([...userAnswer].sort()) === JSON.stringify([...expected].sort());
 		correctness = isCorrect ? 4 : 0;
 		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — answer: ${expected.join(", ")}`);
+		if (data.explanation) console.log(`\n  ${data.explanation}`);
+
+	} else if (data.question_type === "exactMatch") {
+		const input = (await ask("Answer: ")).trim();
+		userAnswer = input;
+		const answers = Array.isArray(data.answer) ? data.answer : [data.answer];
+		const isCorrect = answers.some((a) =>
+			data.case_sensitive ? input === String(a).trim() : input.toLowerCase() === String(a).trim().toLowerCase()
+		);
+		correctness = isCorrect ? 4 : 0;
+		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — accepted: ${answers.join(" / ")}`);
+		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "ordering") {
 		console.log(formatOptions(data.options) + "\n");
 		const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim().toLowerCase();
 		userAnswer = input.split(",").map((s) => s.trim()).filter(Boolean);
 		console.log("\n  Response recorded.");
+		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else {
 		// freeText
@@ -243,7 +327,11 @@ async function studySession(userId, settings) {
 	}
 
 	// Fetch queue (server refills if low)
-	let items = await api("GET", `/queue?user_id=${userId}&limit=50`);
+	const weightParam = Object.entries(settings.course_weights ?? {})
+		.map(([id, w]) => `${id}:${w}`)
+		.join(",");
+	const weightsQuery = weightParam ? `&weights=${encodeURIComponent(weightParam)}` : "";
+	let items = await api("GET", `/queue?user_id=${userId}&limit=50${weightsQuery}`);
 
 	// Filter to enabled courses
 	items = items.filter((item) => activeCourseIds.includes(item.course_id));
@@ -274,16 +362,8 @@ async function studySession(userId, settings) {
 
 	for (const item of items) {
 		clear();
+		if (item.item_data.breadcrumb) console.log(`\n  ${item.item_data.breadcrumb}\n`);
 		const data = item.item_data;
-
-		// Fetch full body on-demand (item_data no longer stores body/question_text)
-		const full = await api(
-			"GET",
-			item.item_type === "content"
-				? `/content/${data.id}`
-				: `/questions/${data.id}`
-		);
-		Object.assign(data, full);
 
 		if (item.item_type === "content") {
 			await showContent(data);
@@ -296,7 +376,7 @@ async function studySession(userId, settings) {
 			// Submit response before dequeuing so a crash between the two leaves the item in queue
 			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true) and ordering (deterministic)
 			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
-			if (data.question_type === "singleChoice" || data.question_type === "multiChoice") submitBody.correctness = correctness;
+			if (data.question_type === "singleChoice" || data.question_type === "multiChoice" || data.question_type === "exactMatch") submitBody.correctness = correctness;
 			const submitted = await api("POST", "/responses", submitBody);
 
 			if (submitted.needs_grading) {
@@ -307,6 +387,8 @@ async function studySession(userId, settings) {
 				if (graded) {
 					const labels = ["Wrong", "Mostly wrong", "Partial", "Mostly correct", "Correct"];
 					console.log(`  Grade: ${graded.correctness}/4 — ${labels[graded.correctness] ?? "?"}`);
+					if (data.answer) console.log(`\n  Example answer: ${data.answer}`);
+					if (data.explanation) console.log(`\n  ${data.explanation}`);
 					correctness = graded.correctness;
 				} else {
 					console.log("  (Grading failed — will be retried by server.)");
@@ -316,7 +398,7 @@ async function studySession(userId, settings) {
 
 			await api("DELETE", `/queue/${item.id}`).catch(() => {});
 
-			if (data.question_type === "singleChoice" || data.question_type === "multiChoice") {
+			if (data.question_type === "singleChoice" || data.question_type === "multiChoice" || data.question_type === "exactMatch") {
 				if (correctness === 4) correct++;
 				total++;
 			}

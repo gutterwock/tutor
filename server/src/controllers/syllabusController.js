@@ -116,8 +116,8 @@ async function uploadSyllabus(req, res) {
 		const total = inserted + skipped;
 		return res.status(200).json({ inserted, skipped, total });
 	} catch (err) {
-		console.error("uploadSyllabus error:", err);
-		return res.status(500).json({ error: "Internal server error" });
+		console.error("uploadSyllabus error:", err.message, err.detail ?? "");
+		return res.status(500).json({ error: err.message });
 	}
 }
 

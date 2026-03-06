@@ -31,8 +31,8 @@ async function getActiveUserIds() {
 }
 
 /**
- * Responses that need grading: freeText or ordering questions where graded_at IS NULL.
- * singleChoice / multiChoice are graded immediately by the app and are excluded.
+ * Responses that need grading: freeText (AI) or ordering (deterministic) where graded_at IS NULL.
+ * singleChoice / multiChoice / exactMatch are graded immediately on submission and never appear here.
  */
 async function getUngradedResponses(userId) {
 	const res = await pool.query(

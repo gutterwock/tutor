@@ -21,50 +21,46 @@ server/       Express API server + cron adaptive engine
     models/       DB queries
     routes/       Route wiring
     services/     ai, grading, adaptiveGenerator, cron, scheduler, embedding
-mcp/          MCP plugin — study tools for Claude (stdio transport)
-  src/
-    tools/        get_queue, get_item_body, submit_response, record_grade, …
 app/          CLI study client (Node.js, no dependencies)
-courseData/   Static course JSON files (source for ingest)
+courseData/   Course source files (markdown primary; legacy JSON supported)
   {course-id}/
-    syllabus.json
-    content/{subtopic-id}.json
-    questions/{subtopic-id}.json
-scripts/      ingest.js — loads courseData/ into the API server
+    syllabus.md
+    {subtopic-id}.md
+programs/     Multi-course learning program documents (markdown)
+docs/         Format specs for course authoring
+scripts/      ingest.js, course-status.js
 .claude/commands/  Custom slash commands (course generation skills)
 ```
 
 ## Quick start
 
-### 1. Database
-
-Commands use `podman`; substitute `docker` if preferred.
-On Windows, use a named volume — bind-mounting a host path causes permission errors.
+### 1. Database + server (compose)
 
 ```bash
-podman build -t tutor-db ./database
+# Create the named volume on first run
+podman volume create tutor-db-data
+
+# Start both services (builds images if needed)
+podman compose up
+
+# Rebuild after code or schema changes
+podman compose up --build
+
+# Stop (volume preserved)
+podman compose down
+
+# Reset DB (wipe and reinitialise)
+podman compose down && podman volume rm tutor-db-data && podman volume create tutor-db-data && podman compose up
+```
+
+**For hot-reload dev** — run just the DB in a container and the server directly:
+
+```bash
 podman run --name tutor-db -p 5432:5432 -v tutor-db-data:/var/lib/postgresql/data tutor-db
+cd server && npm install && npm run dev
 ```
 
-Reset: `podman stop tutor-db && podman rm tutor-db && podman volume rm tutor-db-data`
-
-### 2. API server
-
-```bash
-cd server
-npm install
-npm start        # port 3000 (or $PORT)
-npm run dev      # with nodemon
-```
-
-OR
-
-```bash
-podman build -t tutor-server ./server
-podman run --name tutor-server --network host tutor-server
-```
-
-### 3. Load course data
+### 2. Load course data
 
 ```bash
 node scripts/ingest.js                         # all courses
@@ -72,7 +68,7 @@ node scripts/ingest.js aws-security-specialty  # one course
 node scripts/ingest.js --dry-run               # preview
 ```
 
-### 4a. CLI
+### 3. CLI
 
 ```bash
 node app/index.js
@@ -85,32 +81,6 @@ Main menu: Study / Manage courses / Settings. Your user ID is saved in `app/.use
 - `freeText` — graded in real-time by AI, grade shown before moving on
 - `ordering` — graded deterministically by the server
 - End of session: if any subtopics are struggling, you're prompted to generate extra practice content (runs in background, appears next session)
-
-### 4b. MCP plugin (Claude)
-
-```bash
-cd mcp && npm install
-```
-
-Add to `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "tutor-ai": {
-      "command": "node",
-      "args": ["/absolute/path/to/project/mcp/src/index.js"],
-      "env": {
-        "API_URL": "http://localhost:3000"
-      }
-    }
-  }
-}
-```
-
-Tools: `get_queue`, `get_item_body`, `consume_item`, `submit_response`, `record_grade`, `create_content`, `create_question`, `list_courses`, `enroll`, `get_progress`.
-
-`get_queue` returns one item at a time (slim metadata only). Call `get_item_body` to fetch the full content/question before displaying, then `consume_item` after. Repeat per item.
 
 ---
 
@@ -173,7 +143,8 @@ Tools: `get_queue`, `get_item_body`, `consume_item`, `submit_response`, `record_
 Credentials: host `localhost`, port `5432`, db/user/password all `rag`.
 
 ```bash
-podman exec -it tutor-db psql -U rag -d rag
+podman exec -it tutor-db-1 psql -U rag -d rag   # compose
+podman exec -it tutor-db psql -U rag -d rag      # standalone
 ```
 
 Seven tables with optional 384-dim pgvector embeddings (all-MiniLM-L6-v2):
@@ -194,7 +165,7 @@ Syllabus IDs use slug hierarchy: `aws-security-specialty` → `aws-security-spec
 
 ## Generating courses
 
-Use Claude Code skills to generate `courseData/` JSON files, then ingest:
+Course source files are markdown. Use Claude Code skills to generate `courseData/` files, then ingest:
 
 ```
 /generate-course aws-security-specialty
@@ -212,3 +183,21 @@ Resume or partial regeneration:
 /generate-course spanish-a2 from topic 3 content
 /generate-course spanish-a2 regenerate topic 2
 ```
+
+Check generation progress:
+
+```bash
+node scripts/course-status.js                    # all courses
+node scripts/course-status.js aws-security-specialty
+```
+
+## Generating programs
+
+A program is an ordered plan of courses (and projects/reviews) for a learning goal. Generate the program document first, then generate each course individually:
+
+```
+/generate-program become a backend engineer
+/generate-program pass the AWS Security Specialty exam, exam-focused only
+```
+
+Writes to `programs/{program-id}.md`. Use the stage descriptions as input for `/generate-course`.

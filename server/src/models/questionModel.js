@@ -15,8 +15,8 @@ async function replaceBaseQuestions(syllabusId, rows) {
 		const ids = [];
 		for (const row of rows) {
 			const result = await client.query(
-				`INSERT INTO question (syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, tags, embedding)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				`INSERT INTO question (syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, tags, content_ids, case_sensitive, embedding)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 				 RETURNING id`,
 				[
 					row.syllabus_id,
@@ -27,7 +27,10 @@ async function replaceBaseQuestions(syllabusId, rows) {
 					row.question_text,
 					JSON.stringify(row.options ?? null),
 					JSON.stringify(row.answer),
+					row.explanation ?? null,
 					row.tags ?? [],
+					row.content_ids ?? [],
+					row.caseSensitive ?? false,
 					row.embedding ?? null,
 				]
 			);
