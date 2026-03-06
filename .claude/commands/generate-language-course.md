@@ -1,3 +1,7 @@
+---
+description: Generate a structured language course (syllabus, content, questions) with CEFR-aware scoping and bilingual content
+---
+
 # Skill: generate-language-course
 
 ## Purpose
@@ -160,10 +164,17 @@ All base tags (`phase:*`) apply. In addition, apply the following language-speci
 
 ### Override: Content Generation
 
-Follow the base skill's step-by-step approach (first topic checkpoint, then continue). Apply these language-specific content rules:
+Follow the base skill's step-by-step approach including the review loop and subagent dispatch. When firing subagents, add to step 1 of their prompt: "Also read `.claude/commands/generate-language-course.md` and apply all its overrides." Apply these language-specific content rules:
 
 **Vocabulary content records:**
 - Each `type:vocabulary-item` record covers **one lexical item** (word, phrase, or fixed expression)
+- Content block header uses `meta.*:` lines for vocabulary metadata:
+  - `meta.word:` — the headword
+  - `meta.pos:` — part of speech (e.g. `verb`, `noun`, `adjective`)
+  - `meta.gender:` — grammatical gender if applicable (e.g. `masculine`, `feminine`); omit if not relevant
+  - `meta.register:` — `neutral`, `formal`, or `informal`
+  - `meta.ipa:` — IPA transcription (or omit for languages where a simpler system is standard — use `meta.pinyin:` for Chinese, `meta.romaji:` for Japanese)
+  - `meta.cefrLevel:` — CEFR or equivalent level string (e.g. `A2`, `HSK3`)
 - Body must include:
   - The target-language item (bolded)
   - Pronunciation hint where helpful (IPA or phonetic approximation in parentheses)
@@ -171,9 +182,9 @@ Follow the base skill's step-by-step approach (first topic checkpoint, then cont
   - Grammatical category and any key inflectional info (gender for nouns, verb class, irregular forms)
   - 2–3 example sentences in the target language with English translations
   - Usage note or register note if relevant
-- `metadata` must include: `"word"`, `"pos"` (part of speech), `"gender"` (if applicable), `"register"`, `"cefrLevel"`
 
 **Grammar content records:**
+- Block header: `meta.structureName:`, `meta.cefrLevel:`
 - Body must include:
   - Clear statement of the rule
   - Formation/conjugation paradigm in a Markdown table where applicable
@@ -181,12 +192,11 @@ Follow the base skill's step-by-step approach (first topic checkpoint, then cont
   - Contrastive note (how this differs from a similar or related structure)
   - 3–5 example sentences with translations
   - Common learner errors / pitfalls
-- `metadata` must include: `"structureName"`, `"cefrLevel"`
 
 **Reading/Listening content records:**
 - Include an inline passage (150–400 words for reading; describe a spoken scenario/transcript for listening)
 - Follow with comprehension focus notes (what the learner should notice)
-- `metadata` must include: `"wordCount"` (for reading), `"textType"` (e.g. `"email"`, `"news"`, `"conversation"`)
+- Block header: `meta.wordCount:` (for reading), `meta.textType:` (e.g. `email`, `news`, `conversation`)
 
 **Pronunciation content records:**
 - Describe the sound or pattern in plain language
@@ -222,64 +232,66 @@ Follow the base skill's step-by-step approach. Apply these language-specific que
 **Language-specific question formats:**
 
 *Translation (singleChoice):*
-```json
-{
-  "question_text": "What does '**hablar**' mean in English?",
-  "options": { "a": "to listen", "b": "to speak", "c": "to write", "d": "to read" },
-  "answer": "b"
-}
+```
+### question singleChoice difficulty:1
+tags: phase:atomic, skill:vocabulary, focus:translation
+What does **hablar** mean in English?
+a: to listen
+b: to speak
+c: to write
+d: to read
+answer: b
 ```
 
-*Fill-in-the-blank (freeText):*
-```json
-{
-  "question_type": "freeText",
-  "question_text": "Complete the sentence with the correct form of 'hablar': 'Nosotros _____ español todos los días.'",
-  "answer": "hablamos"
-}
+*Fill-in-the-blank (exactMatch):*
+```
+### question exactMatch difficulty:1
+tags: phase:atomic, skill:grammar, focus:production
+Complete the sentence with the correct form of *hablar*: "Nosotros _____ español todos los días."
+answer: hablamos
 ```
 
 *Error correction (singleChoice):*
-```json
-{
-  "question_text": "Which sentence contains an error?\na) Ella habla español.\nb) Ella hablo español.\nc) Ella habla inglés.\nd) Nosotros hablamos.",
-  "answer": "b"
-}
+```
+### question singleChoice difficulty:2
+tags: phase:complex, skill:grammar, focus:error-correction
+Which sentence contains an error?
+a: Ella habla español.
+b: Ella hablo español.
+c: Ella habla inglés.
+d: Nosotros hablamos.
+answer: b
 ```
 
 *Sentence reconstruction (ordering):*
-```json
-{
-  "question_type": "ordering",
-  "question_text": "Put the words in the correct order to form a sentence:",
-  "options": { "a": "español", "b": "hablo", "c": "yo", "d": "bien" },
-  "answer": ["c", "b", "a", "d"]
-}
+```
+### question ordering difficulty:2
+tags: phase:complex, skill:grammar, focus:production
+Put the words in the correct order to form a sentence:
+a: español
+b: hablo
+c: yo
+d: bien
+answer: cbad
 ```
 
 *Passage comprehension (singleChoice with inline text):*
-```json
-{
-  "question_text": "Read the following and answer:\n\n'María va al mercado todos los sábados. Compra frutas, verduras y a veces flores para su casa.'\n\nWhy does María go to the market?",
-  "options": { "a": "To buy clothes", "b": "To buy food and flowers", "c": "To meet friends", "d": "To sell produce" },
-  "answer": "b"
-}
+```
+### question singleChoice difficulty:2
+tags: phase:integration, skill:reading, focus:comprehension
+Read the following and answer:
+
+*María va al mercado todos los sábados. Compra frutas, verduras y a veces flores para su casa.*
+
+Why does María go to the market?
+a: To buy clothes
+b: To buy food and flowers
+c: To meet friends
+d: To sell produce
+answer: b
 ```
 
 **Distractor quality rule:** singleChoice distractors for language questions must be plausible — use related vocabulary, common conjugation errors, or near-synonyms. Never use obviously wrong distractors.
-
----
-
-Vocabulary content records should additionally include:
-```json
-{
-  "word": "hablar",
-  "pos": "verb",
-  "gender": null,
-  "register": "neutral",
-  "ipa": "/aˈblaɾ/"
-}
-```
 
 ---
 
@@ -298,7 +310,7 @@ In addition to base distribution targets (3–5 content records per phase per su
 All base constraints apply, plus:
 
 - Never omit translations — every target-language string in a content body must have an inline English (or L1) translation
-- Do not generate audio content — describe listening content as transcripts or spoken scenario descriptions (`content_type: "text"` only)
+- Do not generate audio content — describe listening content as transcripts or spoken scenario descriptions (text only; omit the `type:` line in content block headers)
 - Do not invent grammar rules — use standard, well-attested linguistic descriptions for the target language
 - Do not generate IPA for languages where IPA transcription would be unreliable or where a simpler phonetic system is standard (e.g. for Chinese, use pinyin; for Japanese, use romaji alongside kana)
 - All example sentences must be grammatically correct in the target language

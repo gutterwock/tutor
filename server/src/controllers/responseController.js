@@ -59,7 +59,7 @@ async function submitResponse(req, res) {
 
 		// Auto-grade: look up question type and answer
 		const qRes = await pool.query(
-			`SELECT question_type, question_text, answer FROM question WHERE id = $1`,
+			`SELECT question_type, question_text, answer, case_sensitive FROM question WHERE id = $1`,
 			[question_id]
 		);
 		if (!qRes.rows.length) {
@@ -78,8 +78,8 @@ async function submitResponse(req, res) {
 			});
 		}
 
-		// Deterministic grading for singleChoice / multiChoice / ordering
-		correctness = gradeResponse(q.question_type, user_answer, q.answer) ?? 0;
+		// Deterministic grading for singleChoice / multiChoice / ordering / exactMatch
+		correctness = gradeResponse(q.question_type, user_answer, q.answer, { caseSensitive: q.case_sensitive }) ?? 0;
 		const row = await responseModel.submitResponse(question_id, user_id, user_answer, correctness);
 		const pipeline = await runPipeline(user_id);
 		return res.status(201).json({ ...row, needs_grading: false, pipeline });

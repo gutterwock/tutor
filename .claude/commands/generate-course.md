@@ -1,8 +1,12 @@
+---
+description: Generate a structured course (syllabus, content, questions) for the adaptive tutor platform
+---
+
 # Skill: generate-course
 
 ## Purpose
 
-Generate a structured base course (syllabus, content, and questions) for the adaptive tutor platform. Supports creating a new course from scratch, resuming a partially generated course, or refining an existing syllabus.
+Generate a structured base course (syllabus and subtopic files) for the adaptive tutor platform. Supports creating a new course from scratch, resuming a partially generated course, or refining an existing syllabus.
 
 ## Instructions
 
@@ -14,9 +18,9 @@ You are generating a base course for the adaptive learning platform. The user ha
 
 1. **Existing course patterns** (case-insensitive):
    - `{course-id} resume` → Resume from last checkpoint
-   - `{course-id} from topic N {content|questions}` → Continue from specific topic/phase
+   - `{course-id} from topic N` → Continue from a specific topic
    - `{course-id} regenerate topic N` or `regenerate topics N, M, K` → Overwrite specific topic(s)
-   - `{course-id} regenerate all {content|questions}` → Regenerate entire phase
+   - `{course-id} regenerate subtopic {subtopic-id}` → Overwrite a single subtopic file
    - `{course-id} revise syllabus` → Modify existing syllabus
 
 2. **New course** (no matching `courseData/{course-id}/` directory):
@@ -24,15 +28,15 @@ You are generating a base course for the adaptive learning platform. The user ha
 
 **For new courses, extract:**
 - **subject** – what the course covers (e.g. "AWS Security Specialty cert", "Spanish A2 proficiency", "Econ 101")
-- **prerequisites** – prior knowledge required (e.g. "AWS user 2 years", "Spanish A1 proficiency"). Default to none if not specified.
-- **exam** – whether this is for a specific exam/cert, and whether the user only cares about passing the exam vs. deep learning. Default to null if not specified.
+- **prerequisites** – prior knowledge required. Default to none if not specified.
+- **exam** – whether this is for a specific exam/cert, and whether the user only cares about passing vs. deep learning. Default to null if not specified.
 
 **For existing courses, check the state:**
-1. Check if `courseData/{course-id}/` exists
+1. Check if `courseData/{course-id}/syllabus.md` exists
 2. Determine the mode:
-   - **Syllabus-only**: `syllabus.json` exists but no content/question files → ask if user wants to approve syllabus or modify it, then proceed to content generation
-   - **Partially generated**: some content or question files exist → show progress, ask which topics to continue, skip, or regenerate
-   - **Complete**: all content and questions exist → ask if user wants to regenerate specific topics or refine
+   - **Syllabus-only**: `syllabus.md` exists but no subtopic files → ask if user wants to approve syllabus or modify it, then proceed to subtopic generation
+   - **Partially generated**: some `{subtopic-id}.md` files exist → show progress, ask which topics to continue, skip, or regenerate
+   - **Complete**: all subtopic files exist → ask if user wants to regenerate specific topics or refine
 
 If any required input is ambiguous or missing, ask the user before proceeding.
 
@@ -45,19 +49,14 @@ Before generating anything, assess whether the subject is appropriately scoped f
 **Size limit guidelines (guidelines only, not hard limits):**
 - ~10 topics
 - ~60 subtopics
-- ~1000 content records
+- ~1000 content blocks
 - ~1000 questions
 - ~100 hours of study time
 
-If the subject is too broad (e.g. "Computer Science", "French"), prompt the user with three options:
-1. **Split** – provide suggested sub-courses (e.g. CS → DSA, Systems, Networks, Compilers…) and let them pick which to generate
+If the subject is too broad, prompt the user with three options:
+1. **Split** – provide suggested sub-courses and let them pick which to generate
 2. **Reduce** – proceed with a reduced scope (explain what will be excluded)
 3. **Proceed anyway** – generate the full course despite the size
-
-Examples of subjects that need splitting:
-- "Computer Science" → DSA, Systems, Networks, Compilers, OS, etc.
-- "French" → A1, A2, B1, B2, Literature/Other Media, etc.
-- "Biology" → Cell Biology, Genetics, Ecology, Physiology, etc.
 
 ---
 
@@ -66,136 +65,199 @@ Examples of subjects that need splitting:
 Determine the course ID as a lowercase hyphenated slug from the subject (e.g. `aws-security-specialty`, `spanish-a2`, `econ-101`).
 
 Write all files under `courseData/{course-id}/`:
+
 ```
 courseData/{course-id}/
-  syllabus.json              # single nested object with topics → sub_topics hierarchy
-  content/
-    {subtopic-id}.json       # one file per subtopic, array of content records
-  questions/
-    {subtopic-id}.json       # one file per subtopic, array of question records
+  syllabus.md                  # course/topic/subtopic hierarchy
+  {subtopic-id}.md             # one file per subtopic — content blocks and questions interleaved
 ```
 
-Only generate fields that you can fill with real content. Fields populated by the upload pipeline (`id`, `embedding`, `active`, `base_content`, `checksum`, `content_ids`, `question_ids`) must be omitted entirely.
+Content and questions are **colocated** in the subtopic file — there are no separate `content/` or `questions/` directories. Each subtopic is generated in a single pass.
+
+Do not generate fields set by the upload pipeline (`id`, `embedding`, `active`, `base_content`, `checksum`, `content_ids`, `question_ids`).
 
 ---
 
 ### Schema Reference
 
-All records must conform to `prompt/schema.yaml` (source of truth) and `database/schema.json`. Only include fields the skill can populate — omit anything that is set by the upload pipeline. Key points:
+#### `syllabus.md`
 
-**Syllabus structure** (`syllabus.json` — nested hierarchy):
-```json
-{
-  "id": "spanish-a2",
-  "name": "Spanish A2",
-  "description": "...",
-  "prerequisites": ["Spanish A1 proficiency"],
-  "exam": { "exam": "DELE A2" },
-  "topics": [
-    {
-      "id": "spanish-a2.1",
-      "name": "Topic 1",
-      "description": "...",
-      "sub_topics": [
-        {
-          "id": "spanish-a2.1.1",
-          "name": "Subtopic 1.1",
-          "objectives": ["Objective 1", "Objective 2"],
-          "prerequisites": []
-        }
-      ]
-    }
-  ]
-}
+Heading levels encode hierarchy. Metadata lines follow each heading. Sort order is determined by position in the file.
+
+```markdown
+# Course Name
+id: {course-id}
+description: Single-line description.
+prerequisites:
+- Prior knowledge requirement 1
+- Prior knowledge requirement 2
+exam: Exam name if exam-focused
+
+## Topic Name
+id: {course-id}.1
+description: Optional single-line description.
+
+### Subtopic Name
+id: {course-id}.1.1
+objectives:
+- Specific measurable learning objective 1
+- Specific measurable learning objective 2
+prerequisites:
+- {course-id}.1.0
 ```
 
-**Content record** (in `content/{subtopic-id}.json` — array of records):
-```json
-[
-  {
-    "syllabus_id": "spanish-a2.1.1",
-    "content_type": "text",
-    "title": "...",
-    "body": "...",
-    "tags": ["phase:atomic", "some topic"],
-    "links": []
-  }
-]
+Rules:
+- `#` = course root, `##` = topic, `###` = subtopic
+- `prerequisites:` on a subtopic is a list of subtopic IDs
+- `objectives:` on a subtopic is a list of measurable learning objectives
+
+#### `{subtopic-id}.md`
+
+Each subtopic file opens with a `syllabus_id:` line, then interleaves content blocks (`##`) and question blocks (`###`).
+
+```markdown
+syllabus_id: {course-id}.1.1
+# Optional Human-Readable Title
+
+### question singleChoice difficulty:1
+tags: phase:atomic
+[optional ungated diagnostic question before any ## block]
+a: ...
+b: ...
+answer: a
+
+## [phase:atomic] Content Block Title
+tags: topic-tag, another-tag
+
+Body text. Supports full markdown including fenced blocks (Mermaid etc.).
+
+### question singleChoice difficulty:1
+tags: phase:atomic
+Question text gated on the preceding ## block.
+a: ...
+b: ...
+answer: a
+
+### question multiChoice difficulty:2
+tags: phase:atomic
+...
+answer: ab
+
+## [phase:complex] Content Block Title
+tags: topic-tag
+
+Body text.
+
+### question singleChoice difficulty:2
+tags: phase:complex
+...
+answer: b
+
+## [phase:integration] Content Block Title
+tags: topic-tag
+
+Body text.
+
+### question freeText difficulty:3
+tags: phase:integration
+Question requiring synthesis.
+answer: Sample correct response used as AI grading reference.
 ```
 
-**Question record** (in `questions/{subtopic-id}.json` — array of records):
-```json
-[
-  {
-    "syllabus_id": "spanish-a2.1.1",
-    "difficulty": 1,
-    "question_type": "singleChoice",
-    "question_text": "...",
-    "options": { "a": "...", "b": "...", "c": "...", "d": "..." },
-    "answer": "a",
-    "tags": ["phase:atomic"],
-  }
-]
+**Content block header:**
 ```
+## [phase:atomic|complex|integration] Title
+```
+Optional metadata lines before the blank line that separates them from the body:
+- `tags:` — comma-separated topic/skill tags (phase is in heading, omit here)
+- `type:` — omit for text (default); `image`/`audio`/`video` for media (currently disabled — use text only)
+- `meta.<key>:` — arbitrary metadata (e.g. `meta.word:`, `meta.pinyin:` for vocabulary cards)
+
+**Question block header:**
+```
+### question <type> [caseSensitive] difficulty:<n>
+```
+- `type` — `singleChoice`, `multiChoice`, `ordering`, `freeText`, `exactMatch`
+- `caseSensitive` — optional flag for `exactMatch` only
+- `difficulty` — integer 0–4
+
+Tags line (required): `tags: phase:atomic, optional-tag`
+
+Options: bare `key: text` lines before `answer:`. 2–5 options keyed `a`–`e`. Omit for `freeText` and `exactMatch`.
+
+Answer:
+- `singleChoice` — `answer: b`
+- `multiChoice` — `answer: abc` (concatenated, no separator)
+- `ordering` — `answer: bcad` (correct sequence)
+- `freeText` — `answer: Sample correct response`
+- `exactMatch` — one `answer:` line per accepted string
+
+Explanation (optional, use sparingly):
+- `explanation: Brief explanation shown after answering.` — only for genuinely counterintuitive answers or common-misconception traps. Most questions should not have one.
+
+**content→question linking:**
+- A `###` question gates on the nearest preceding `##` content block
+- A `###` before any `##` is ungated (`content_ids: []`) — used for diagnostics
 
 ---
 
 ### Core Principles
 
-**Learning phases** – all content and questions must be tagged with `phase:atomic`, `phase:complex`, or `phase:integration`. There must be records in each phase for every subtopic.
+**Learning phases** – all content blocks and questions must carry a phase tag. Every subtopic must have content and questions in all three phases.
 
-| Phase | Content covers | Question types |
-|---|---|---|
-| atomic | Terms, definitions, vocab, facts, properties, formulas, basic rules/syntax | Recall, true/false, fill-in-blank |
-| complex | Relationships, processes and flows, scenarios, comparisons | Application, scenario-based, multi-step |
-| integration | Multi-step problem solving, synthesis, cross-topic scenarios, trade-off analysis | Analysis, case studies, cross-topic |
+| Phase | Content covers | Question types | Typical difficulty |
+|---|---|---|---|
+| atomic | Terms, definitions, vocab, facts, formulas, basic rules | Recall, true/false, exactMatch, fill-in-blank | 0–1 |
+| complex | Relationships, processes, scenarios, comparisons | Application, scenario-based, multi-step | 2–3 |
+| integration | Synthesis, cross-topic analysis, trade-offs, case studies | freeText, assertion/reason, case studies | 3–4 |
 
-**Microlearning** – each content record must be self-contained and consumable in isolation. The most atomic content should just be a single piece of useful information like flashcards. Include enough context that a record makes sense without reading surrounding records.
+**Microlearning** – each content block must be self-contained and consumable in isolation.
 
-**Multimodal** – currently disabled. Only generate `content_type: "text"` records.
+- **Atomic blocks must be maximally granular** — one concept, one fact, one definition, or one rule per block. If a block covers a topic with multiple distinct parts (e.g. a table of 5+ fields, a list of 4+ configuration options, a comparison of 3+ items), split it into separate blocks, one per part or logical group of 2–3 closely related parts. The test: if you could write a separate quiz question for each part, they should be separate content blocks.
+- Complex and integration blocks may be longer since they cover scenarios and relationships that require context, but still prefer splitting when sections are independently teachable.
+- Aim for **12–20 atomic content blocks per subtopic**. Fewer than 10 suggests blocks are too coarse.
+
+**Ordering** – group by phase, atomic through integration. Within each phase, content precedes its questions:
+
+```
+[optional ungated diagnostic questions]
+phase:atomic content and questions
+phase:complex content and questions
+phase:integration content and questions
+```
+
+**Question variety** – mix `singleChoice` variants (true/false, assertion/reason, best-answer, exception-based), `multiChoice`, `ordering`, `freeText`, and `exactMatch` as appropriate. No fixed percentages — let the content drive the type.
 
 **Syllabus design:**
-- Use topic ordering in the `topics` array to specify the logical learning sequence
-- Use `prerequisites` arrays on subtopics to specify prerequisite subtopic IDs (handle circular dependencies with first-come-first-serve)
-- Include `objectives` arrays on each subtopic with specific, measurable learning objectives
-- Include a dedicated cross-topic integration topic at the end if possible
+- Topic ordering in the file specifies the logical learning sequence
+- Subtopic `prerequisites:` lists subtopic IDs that must be completed first
+- Include a cross-topic integration topic at the end where possible
 - If exam-focused, include exam-specific question patterns (timing, format, trick options)
-
-**Distribution targets (approximate):**
-- Mix question types across singleChoice, multiChoice, freeText, and ordering — distribution varies based on phase, topic, and exam format; no fixed percentages required
-- `singleChoice` questions can take many variants: true/false, assertion/reason, best-answer, exception-based, etc.
-- Difficulty usually correlates with phase: atomic→0-1, complex→2-3, integration→3-4, but is flexible
 
 ---
 
 ### Progress Detection
 
-**When resuming an existing course, assess completion:**
+**When resuming an existing course:**
 
-1. **Check syllabus.json:**
-   - If missing → start from Step 1 (Syllabus)
-   - If present → parse it to understand topics and subtopics
+1. **Check `syllabus.md`:**
+   - Missing → start from Step 1
+   - Present → parse to get the full list of subtopic IDs
 
-2. **Check content directory:**
-   - List all `content/{subtopic-id}.json` files that exist
-   - Calculate how many topics have complete or partial content
-   - Identify missing topics
+2. **Check for subtopic files:**
+   - List all `{subtopic-id}.md` files that exist under `courseData/{course-id}/`
+   - Identify which subtopics are done vs missing
 
-3. **Check questions directory:**
-   - List all `questions/{subtopic-id}.json` files that exist
-   - Calculate completion status
-
-4. **Report to user:**
+3. **Report to user:**
    ```
    Existing course: spanish-a2
    - Syllabus: ✅ Complete (4 topics, 12 subtopics)
-   - Content: ⚠️  Partial (Topic 1 done, Topics 2-4 pending)
-   - Questions: ❌ Not started
+   - Subtopics: ⚠️  Partial — 5/12 done (Topic 1 complete, Topics 2-4 pending)
 
    What would you like to do?
-   - [A] Continue with Topic 2 content
-   - [B] Regenerate Topic 1 content
-   - [C] Start generating questions for Topic 1
+   - [A] Continue from Topic 2
+   - [B] Regenerate Topic 1
+   - [C] Regenerate a specific subtopic
    - [D] Other
    ```
 
@@ -204,119 +266,109 @@ All records must conform to `prompt/schema.yaml` (source of truth) and `database
 ### Step 1 — Syllabus (Generate or Review)
 
 **If no syllabus exists:**
-1. Generate `courseData/{course-id}/syllabus.json` as a nested JSON object with the course root and its topics/sub_topics hierarchy
-2. Include `objectives` and `prerequisites` arrays on each subtopic
-3. Pause and show the user:
+1. Generate `courseData/{course-id}/syllabus.md` in the format above
+2. Pause and show the user:
    - The course ID and name
    - A tree view of topics and subtopics
-   - Approximate content/question counts per topic
+   - Approximate content block and question counts per topic
    - Any scope concerns
    - Key learning objectives per topic
-4. Ask: "Does this syllabus look good? Reply yes to continue to content generation, or provide feedback to revise."
-5. Do not proceed to Step 2 until the user approves
+3. Ask: "Does this syllabus look good? Reply yes to continue to subtopic generation, or provide feedback to revise."
+4. Do not proceed to Step 2 until the user approves
 
 **If syllabus exists:**
-1. Load `courseData/{course-id}/syllabus.json`
+1. Load and parse `courseData/{course-id}/syllabus.md`
 2. Show the user the existing structure
-3. Ask if they want to:
-   - **Keep and continue**: Use this syllabus for content/question generation
-   - **Modify**: Revise the syllabus before proceeding
-   - **Regenerate**: Create a new syllabus (backup the old one)
-4. If modifying, apply edits and re-approve before proceeding
+3. Ask if they want to keep and continue, modify, or regenerate (backup old if regenerating)
 
 ---
 
-### Step 2 — Content Generation (Generate or Resume)
+### Step 2 — Subtopic Files (Generate or Resume)
 
-Generate content depth-first, one topic at a time.
-
-**Before starting:**
-1. Check which content files already exist
-2. If any exist, show the user:
-   - Which topics have content already
-   - Which topics need content
-3. Ask if they want to:
-   - **Continue**: Skip existing files, generate remaining topics
-   - **Regenerate topic N**: Overwrite specific topic(s)
-   - **Regenerate all**: Start fresh (backup existing files)
-
-**For each topic (starting with the first unapproved or requested):**
-1. Create `courseData/{course-id}/content/{subtopic-id}.json` for each subtopic
-2. Show a summary (record count, phases covered, sample titles)
-3. Ask: "Content for topic X looks good? Reply yes to continue with remaining topics, or provide feedback."
-4. Once approved, continue to next topic without interruption
-
-**Progress tracking:**
-- After each topic is generated and approved, note which topics are done
-- If interrupted, the user can resume later with the same command + `from topic N content` or similar
-- Upon resumption, display a progress summary (e.g., "Topics 1–2 content done; starting Topic 3")
-
----
-
-### Step 3 — Questions (Generate or Resume)
-
-Generate questions depth-first, one topic at a time. Follow the same pattern as Step 2.
+Each subtopic file contains both content blocks and questions — generate together in a single pass.
 
 **Before starting:**
-1. Check which question files already exist
-2. If any exist, ask if user wants to continue, regenerate specific topics, or regenerate all
+1. Check which `{subtopic-id}.md` files already exist
+2. Show the user which topics are done and which are pending
+3. Identify the first pending subtopic
 
-**For each topic (starting with the first unapproved or requested):**
-1. Create `courseData/{course-id}/questions/{subtopic-id}.json` for each subtopic
-2. Show a summary (question count, types, difficulty distribution, phases covered)
-3. Ask: "Questions for topic X look good? Reply yes to continue with remaining topics."
-4. Once approved, continue to next topic
+**Review loop (before bulk generation):**
+
+Generate the first pending subtopic inline (in this conversation) and show it to the user. Then ask:
+
+> "Show another sample, or proceed? Options: **proceed** (all remaining), **proceed till topic N**, **proceed for N more topics**. Add **batch N** to change parallelism (default: 3)."
+
+- **"another"** → generate the next pending subtopic inline and repeat
+- **"proceed [qualifier]"** → parse boundary, dispatch subagents (below)
+
+**Boundary parsing:**
+- `proceed` / no qualifier → all remaining subtopics
+- `proceed till topic N` / `proceed to topic N` → up to and including topic N
+- `proceed for N more topics` → the next N topics from current position
+
+**Subagent dispatch:**
+
+Default batch size is **3 subtopics in parallel**. The user may override this at any time by saying e.g. "batch 5" or "batch 1". Parse any `batch N` instruction and use that batch size for the current and future dispatches in the session.
+
+Collect all remaining subtopic IDs within the boundary (excluding already-written files and those generated in the review loop). Dispatch in batches of the current batch size: fire one Agent tool call per subtopic in a single message (parallel), wait for all to complete, then fire the next batch.
+
+Each subagent receives this prompt (fill in `{}` placeholders):
+
+> Generate one subtopic file for the adaptive learning platform.
+>
+> 1. Read `.claude/commands/generate-course.md` — your schema and content principles reference.
+> 2. Read `courseData/{course-id}/syllabus.md` — course context.
+> 3. Generate the subtopic file for **{subtopic-id}** ({subtopic name}). Objectives: {list objectives from syllabus}
+> 4. Write to `courseData/{course-id}/{subtopic-id}.md`.
+>
+> Return only: `✅ {subtopic-id} written` or `❌ {subtopic-id} failed: {reason}`
+
+**After each batch completes:**
+- Show a per-batch summary: files written, any failures
+- Continue with the next batch automatically until the boundary is reached
+- If topics beyond the boundary remain, ask what to do next
 
 **Progress tracking:**
-- After each topic is generated and approved, note completion
-- Allow resumption with `from topic N content` or `from topic N questions`
+- On resumption, show progress (e.g. "Topics 1–2 done, starting Topic 3")
+- Never overwrite existing files unless the user explicitly requested regeneration
 
 ---
 
 ### Specialization Note
 
-This skill generates a **generic course**. For specialized domains (e.g. language learning, certification exams with specific item formats), a separate skill should inherit from this one and override the relevant behavior.
+This skill generates a **generic course**. For specialized domains (e.g. language learning, certification exams), a separate skill should inherit from this one and override relevant behaviour.
 
 ---
 
 ### Constraints
 
-**Core generation:**
-- Do not generate `id`, `embedding`, `active`, `base_content`, `checksum`, `content_ids`, or `question_ids` — these are populated by the upload pipeline
-- Do not install dependencies or modify any files outside `courseData/`
-- Only generate `content_type: "text"` (multimodal is disabled)
-- `syllabus_id` on content/question records must be a subtopic ID (e.g. `spanish-a2.1.1`)
-- Include `objectives` (array of learning objectives) and `prerequisites` (array of prerequisite subtopic IDs) on each subtopic
-
-**Resume and partial generation:**
-- Before overwriting existing files (content or questions), offer to back them up by creating a timestamped copy (e.g. `{subtopic-id}.json.backup.20240115`)
-- When resuming, check the existing syllabus and verify it matches the course ID — if mismatch, alert the user
+- Do not generate `id`, `embedding`, `active`, `base_content`, `checksum`, `content_ids`, or `question_ids` — set by the upload pipeline
+- Do not modify files outside `courseData/`
+- Only generate `type: text` content (multimodal disabled — omit the `type:` line entirely)
+- `syllabus_id` in each subtopic file must be the subtopic's ID (e.g. `spanish-a2.1.1`)
+- Every subtopic must have content and questions in all three phases
+- Before overwriting existing files, offer to back them up with a timestamped copy (e.g. `{subtopic-id}.md.backup.20240115`)
 - If regenerating a specific topic, do not touch other topics' files
-- Track which topics/phases have been generated and approved; display progress on resumption
+
+---
 
 ### Resume Syntax
-
-Users can resume or modify course generation with these patterns:
 
 ```
 # Resume from where it left off
 /generate-course spanish-a2 resume
 
-# Resume from a specific topic (content generation)
-/generate-course spanish-a2 from topic 2 content
+# Resume from a specific topic
+/generate-course spanish-a2 from topic 2
 
-# Resume from a specific topic (questions)
-/generate-course spanish-a2 from topic 3 questions
-
-# Regenerate a specific topic (overwrite existing)
+# Regenerate a specific topic (overwrite existing subtopic files for that topic)
 /generate-course spanish-a2 regenerate topic 1
 
 # Regenerate specific topics
 /generate-course spanish-a2 regenerate topics 2, 4, 5
 
-# Regenerate all content/questions
-/generate-course spanish-a2 regenerate all content
-/generate-course spanish-a2 regenerate all questions
+# Regenerate a single subtopic file
+/generate-course spanish-a2 regenerate subtopic spanish-a2.2.3
 
 # Modify existing syllabus
 /generate-course spanish-a2 revise syllabus
@@ -326,7 +378,7 @@ Users can resume or modify course generation with these patterns:
 
 ## Examples
 
-### Creating a new course from scratch
+### Creating a new course
 
 ```
 /generate-course Spanish A2 proficiency, prerequisites: Spanish A1
@@ -339,6 +391,7 @@ Users can resume or modify course generation with these patterns:
 
 ```
 /generate-course spanish-a2 resume
-/generate-course aws-security-specialty from topic 3 content
+/generate-course aws-security-specialty from topic 3
 /generate-course french-b2 regenerate topic 2
+/generate-course french-b2 regenerate subtopic french-b2.3.1
 ```

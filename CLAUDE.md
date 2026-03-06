@@ -8,24 +8,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-### Database
+### Running locally
 
 Commands use `podman`; substitute `docker` if preferred — they are drop-in compatible.
 
-On Windows, bind-mounting a host path (`./pgdata`) causes a `chmod` permission error when PostgreSQL initialises. Use a **named volume** instead — Podman manages it inside the VM where permissions work correctly.
+#### Compose (recommended — runs DB + server together)
 
 ```bash
-# Build the image (once, or after schema changes)
-podman build -t tutor-db ./database
+# First run: create the named volume
+podman volume create tutor-db-data
 
-# Start PostgreSQL + pgvector (data persists in named volume tutor-db-data)
+# Start both services (builds images if needed)
+podman compose up
+
+# Rebuild after code or schema changes
+podman compose up --build
+
+# Stop and remove containers (volume is preserved)
+podman compose down
+
+# Reset DB (wipe data and reinitialise schema)
+podman compose down && podman volume rm tutor-db-data && podman volume create tutor-db-data && podman compose up
+
+# Connect via psql
+podman exec -it tutor-db-1 psql -U rag -d rag
+```
+
+#### DB only (for local server dev with hot-reload)
+
+Run just the database in a container and the server directly with `npm run dev` for faster iteration:
+
+```bash
+# Start DB
 podman run --name tutor-db -p 5432:5432 -v tutor-db-data:/var/lib/postgresql/data tutor-db
 
 # Stop
 podman stop tutor-db && podman rm tutor-db
-
-# Reset (wipe data and reinitialize schema)
-podman stop tutor-db && podman rm tutor-db && podman volume rm tutor-db-data && podman run --name tutor-db -p 5432:5432 -v tutor-db-data:/var/lib/postgresql/data tutor-db
 
 # Connect via psql
 podman exec -it tutor-db psql -U rag -d rag
@@ -33,7 +51,7 @@ podman exec -it tutor-db psql -U rag -d rag
 
 Database credentials: host `localhost`, port `5432`, db/user/password all `rag`.
 
-### API Server
+#### API Server (standalone)
 
 ```bash
 cd server
@@ -42,35 +60,6 @@ npm start               # start server (port 3000, or $PORT)
 npm run dev             # start with nodemon (auto-restart)
 ```
 
-### MCP Plugin
-
-```bash
-cd mcp
-npm install
-```
-
-Register in `.claude/settings.json` (or `claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "tutor-ai": {
-      "command": "node",
-      "args": ["/absolute/path/to/project/mcp/src/index.js"],
-      "env": {
-        "DB_HOST": "localhost",
-        "DB_PORT": "5432",
-        "DB_NAME": "rag",
-        "DB_USER": "rag",
-        "DB_PASSWORD": "rag"
-      }
-    }
-  }
-}
-```
-
-The MCP plugin connects directly to the database — the API server does **not** need to be running. The cron (in the API server) is still useful for bulk grading of any existing ungraded freeText responses and for non-MCP clients, but all grading within a Claude session is immediate.
-
 ### Ingest course data
 
 ```bash
@@ -78,9 +67,10 @@ node scripts/ingest.js                        # all courses
 node scripts/ingest.js aws-security-specialty # one course
 node scripts/ingest.js --dry-run              # preview without hitting server
 node scripts/ingest.js --base-url http://host:3000 <course-id>
+node scripts/ingest.js --convert-only         # parse markdown → JSON files in courseData/{id}/converted/
 ```
 
-Uploads `courseData/` JSON files to the running API server: syllabus first, then content and questions per subtopic. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
+Parses and uploads `courseData/` files (markdown or legacy JSON) to the running API server: syllabus first, then content and questions per subtopic. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
 
 ### Tests
 
@@ -99,10 +89,11 @@ No tests are currently written. Jest is installed; test files go in `server/__te
 ```
 database/       PostgreSQL 17 + pgvector image; schema.sql auto-runs on first start
 server/         Express.js API server (Node.js) + cron adaptive engine
-mcp/            MCP plugin — exposes study tools to Claude via Model Context Protocol
 app/            CLI study client (Node.js, no dependencies)
-courseData/     Static course JSON files (syllabus, content, questions per subtopic)
-scripts/        Utilities: ingest.js loads courseData/ into the API server
+courseData/     Course source files (markdown primary; legacy JSON also supported)
+programs/       Multi-course learning programs (markdown). Each file defines a sequence of stages (courses, projects, reviews) with scope, prerequisites, and course IDs. Used as input when generating courses with /generate-course.
+docs/           Format specs for course authoring (syllabus, subtopic, content, question formats)
+scripts/        ingest.js loads courseData/ into the API server; course-status.js checks generation progress
 prompt/         Schema reference and API endpoint definitions for AI context
 .claude/        Claude Code settings and custom slash commands (skills)
 ```
@@ -115,7 +106,7 @@ prompt/         Schema reference and API endpoint definitions for AI context
 - **`services/embedding.js`** — `@huggingface/transformers`, `Xenova/all-MiniLM-L6-v2` (384-dim). Lazy-loaded. Disabled by default; set `ENABLE_EMBEDDINGS=true` to activate (downloads ~90 MB model on first call). Exports `generateEmbedding`, `generateEmbeddings`, `pgVector`.
 - **`services/ai.js`** — AI dispatch abstraction. `callAI(prompt)` spawns `claude --model $AI_MODEL -p` as a subprocess (local mode). Cloud mode is a TODO stub. Controlled by `AI_MODE` env var (default: `local`); model by `AI_MODEL` (default: `claude-haiku-4-5-20251001`).
 - **`services/grading.js`** — All grading logic: deterministic (`gradeSingleChoice`, `gradeMultiChoice`, `gradeOrdering`) and AI-based (`gradeFreeText` — calls `callAI`). Used by the response controller, cron, and `grade-ai` endpoint.
-- **`services/adaptiveGenerator.js`** — Background adaptive content/question generation for struggling subtopics. Fetches context + recent wrong answers, calls `callAI`, parses JSON response, persists items as `base_content=false`.
+- **`services/adaptiveGenerator.js`** — Adaptive content/question generation for struggling subtopics. Fetches context + recent wrong answers, calls `callAI`, parses JSON response, persists items as `base_content=false`. Runs once per subtopic (guards against re-triggering). Called via `POST /generate-adaptive` at the user's prompt at session end.
 - **`services/cron.js`** — Adaptive engine. Runs on `setInterval` (default 60s). Per-user pipeline: grade ungraded responses → check subtopic completion → refill study queue → unlock next subtopics. Concurrency-safe: skips a tick if the previous one is still running. Acts as fallback grader for any responses missed by real-time grading.
 - **`services/scheduler.js`** — Builds and maintains the per-user `study_queue`. Priority-scored with bit-packed integers (phase → type → difficulty → review → SR score). Handles spaced repetition intervals, struggling detection, regression reactivation, and round-robin course interleaving. Called by `getQueue` (eager) and cron (background).
 - **`controllers/`** — `syllabusController`, `contentController`, `questionController`, `responseController`, `progressController`, `queueController` — all implemented.
@@ -138,12 +129,6 @@ prompt/         Schema reference and API endpoint definitions for AI context
 | `REGRESSION_THRESHOLD` | `1.5` | Avg correctness below this = regressed (reactivates completed subtopic) |
 | `MIN_RESPONSES_REGRESS` | `5` | Min responses before regression fires |
 | `MAINTENANCE_QUESTIONS_PER_COURSE` | `5` | Questions per graduated course added to each queue refill (maintenance mode) |
-
-### MCP plugin environment variables
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `API_URL` | `http://localhost:3000` | Base URL of the tutor.ai REST API server |
 
 ### API Endpoints
 
@@ -192,18 +177,24 @@ Timestamps are 13-digit epoch milliseconds (BIGINT). Syllabus IDs use slug hiera
 
 ### Course Data (`courseData/`)
 
-Static JSON files that serve as the source for database ingestion:
+Markdown files (primary format) that serve as the source for database ingestion. See `docs/` for format specs.
 
 ```
 courseData/{course-id}/
-  syllabus.json              # nested hierarchy: course → topics → sub_topics
-  content/{subtopic-id}.json # array of content records per subtopic
-  questions/{subtopic-id}.json # array of question records per subtopic
+  syllabus.md                # course hierarchy: course → topics → subtopics
+  {subtopic-id}.md           # content + questions for one subtopic
 ```
+
+Legacy JSON format is still supported (see `docs/` for schema). The ingest script prefers `.md` when both exist.
 
 Current courses: `aws-security-specialty`, `japanese-phonetics`, `mandarin-hanzi-hsk1-2`.
 
-Fields populated by the upload pipeline (`id`, `embedding`, `active`, `base_content`, `checksum`, `content_ids`, `question_ids`) must be **omitted** from generated JSON files.
+Check generation progress:
+
+```bash
+node scripts/course-status.js                    # all courses
+node scripts/course-status.js aws-security-specialty
+```
 
 ### Learning Phases
 
@@ -222,7 +213,7 @@ Every subtopic must have records in all three phases.
 ### What is built
 
 **Course authoring** — fully working end-to-end:
-- Claude Code skills (`/generate-course`, `/generate-language-course`) generate `courseData/` JSON files
+- Claude Code skills (`/generate-course`, `/generate-language-course`, `/generate-program`) generate `courseData/` markdown files and `programs/` documents
 - Database schema models all entities including adaptive content (`base_content: false`), performance tracking, and content unlocking (`active` flag)
 
 **API server (data layer)** — fully implemented:
@@ -231,34 +222,19 @@ Every subtopic must have records in all three phases.
 - Embedding generation via `@huggingface/transformers` (lazy-loaded, opt-in via `ENABLE_EMBEDDINGS=true`)
 - `GET /progress` returns active subtopics for a user
 
-**MCP plugin** (`mcp/`) — Claude-native study interface:
-- 10 tools: `get_queue`, `get_item_body`, `consume_item`, `submit_response`, `record_grade`, `create_content`, `create_question`, `list_courses`, `enroll`, `get_progress`
-- `get_queue` returns exactly 1 item (slim metadata only — no body/question_text). Claude calls it before each item.
-- `get_item_body` fetches the full body of a single item on-demand (`item_type` + `item_id`). Call after `get_queue`, before displaying.
-- `submit_response` auto-grades singleChoice/multiChoice/ordering deterministically; for freeText returns context for Claude to grade inline
-- `record_grade` persists Claude's score and immediately runs the post-response pipeline (completion check + subtopic unlock + struggling detection)
-- Pipeline returns `{ completed, unlocked, struggling }` — `struggling` lists subtopics with avg correctness < 1.5 after ≥3 responses, with name and course context
-- `create_content` / `create_question` persist adaptive items Claude generates inline for struggling subtopics (`base_content=false`, never overwritten by ingest); picked up on next `get_queue`
-- Queue refill (via scheduler) triggered on every `get_queue` call — no cron tick needed for active sessions
-- Standalone: connects directly to the database, no dependency on the API server process
-
-> **Context accumulation warning (MCP vs CLI):**
-> The MCP plugin runs inside a single Claude conversation. Every `get_item_body` result — including the raw `embedding vector(384)` column (~1,500 tokens of floats) and full content body — stays in Claude's context window for the lifetime of the session. After ~50 items a session accumulates 80,000–150,000 tokens of tool-result history. Claude Code handles this via automatic compression, but plain Claude Desktop / claude.ai sessions will degrade noticeably past ~30–40 items.
->
-> The CLI client (`app/index.js`) is stateless HTTP — no context accumulation. Prefer the CLI for all-day or high-volume sessions.
->
-> **Mitigation (not yet implemented):** Filter the `embedding` field in `handleGetItemBody` (`mcp/src/tools/queue.js`) before returning to Claude, and project only the fields Claude needs from content/question rows. This alone saves ~1,500 tokens per item.
-
 **Ingest script** (`scripts/ingest.js`) — loads `courseData/` into the API server:
+- Supports both markdown (`.md`) and legacy JSON course formats; prefers `.md`
 - Uploads syllabus, then content and questions per subtopic
 - Supports single course, multiple courses, or all courses
 - `--dry-run` flag for preview; `--base-url` for non-local servers
+- `--convert-only` parses markdown and writes JSON to `courseData/{id}/converted/` for debugging
 
 **App layer (CLI)** — working client (`app/index.js`):
 - Main menu: Study / Manage courses / Settings / Quit
 - Enroll in courses, read content, answer questions, submit responses
-- Handles `singleChoice`, `multiChoice`, `freeText`, `ordering` question types
-- Full item body fetched on-demand from `/content/:id` or `/questions/:id` before each item is shown
+- Handles `singleChoice`, `multiChoice`, `freeText`, `ordering`, `exactMatch` question types
+- Full item body included in `GET /queue` response — no secondary fetch per item
+- Shows breadcrumb (`Course › Topic › Subtopic`) above each item; shows `explanation` after answers where present
 - `freeText` responses graded in real-time via `POST /responses/:id/grade-ai` — grade shown immediately after answering
 - End of session: checks `GET /struggling` and prompts user to generate adaptive practice content; fires `POST /generate-adaptive` as background task if confirmed — new items appear in next session
 - User ID persisted locally in `app/.user_id`; settings persisted in `app/.settings.json`
@@ -308,7 +284,6 @@ App settings (stored in `app/.settings.json`):
 
 ### What is not built
 
-- **Adaptive content/question generation (cron path)** — TODO stub in `scheduler.js`; CLI uses `POST /generate-adaptive` triggered by user prompt; MCP uses inline `create_content` / `create_question`
 - **Cloud AI dispatch** — `services/ai.js` has a TODO stub; only local `claude` subprocess works
 - **Tests** — Jest is installed; `server/__tests__/` is empty
 
@@ -317,36 +292,32 @@ App settings (stored in `app/.settings.json`):
 ### Target architecture
 
 ```
-┌─────────────────────────────────────────────────┐   ┌──────────────────────────────┐
-│  App layer  (CLI / web / mobile)                │   │  Claude (MCP host)           │
-│  Thin client: display content queue, capture    │   │  Runs study sessions via MCP │
-│  responses. No business logic.                  │   │  tools; grades freeText      │
-└────────────────────┬────────────────────────────┘   │  inline (no cron roundtrip). │
-                     │ REST                            └──────────────┬───────────────┘
-                     │                                                │ MCP (stdio)
-┌────────────────────▼────────────────────────────┐   ┌──────────────▼───────────────┐
-│  API server  (data layer)                       │   │  MCP plugin  (mcp/)          │
-│  REST API. No AI, no scheduling.                │   │  Direct DB access.           │
-│  Owns: syllabus, content, content_progress,     │   │  Reuses scheduler for queue  │
-│  content_view, questions, responses, embeddings.│   │  refill. Runs pipeline after │
-└────────────────────┬────────────────────────────┘   │  every graded response.      │
-                     │                                 └──────────────┬───────────────┘
-                     │ reads/writes                                   │ reads/writes
-┌────────────────────▼─────────────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────┐
+│  App layer  (CLI)                               │
+│  Thin client: display queue, capture responses. │
+│  No business logic.                             │
+└────────────────────┬────────────────────────────┘
+                     │ REST
+┌────────────────────▼────────────────────────────┐
+│  API server  (data layer)                       │
+│  REST API. Owns: syllabus, content, questions,  │
+│  responses, content_progress, study_queue.      │
+│  GET /queue returns full item bodies.           │
+└────────────────────┬────────────────────────────┘
                      │ reads/writes
 ┌────────────────────▼────────────────────────────┐
 │  PostgreSQL + pgvector                          │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-                                        ▲
-                                        │ reads performance / writes new content
-                         ┌──────────────┴──────────────────────────┐
-                         │  Cron  (adaptive engine, in API server)  │
-                         │  Spaced repetition, subtopic unlock,     │
-                         │  freeText grading for non-MCP clients.   │
-                         └──────────────────────────────────────────┘
+└─────────────────────────────────────────────────┘
+                          ▲
+                          │ reads performance / writes adaptive content
+          ┌───────────────┴─────────────────────────┐
+          │  Cron  (adaptive engine, in API server)  │
+          │  Spaced repetition, subtopic unlock,     │
+          │  freeText grading fallback.              │
+          └──────────────────────────────────────────┘
 ```
 
-Each layer is independently deployable. The MCP plugin and API server share the same database; the cron runs inside the API server process and acts as a fallback grader for non-MCP clients.
+Each layer is independently deployable. The cron runs inside the API server process.
 
 ---
 
@@ -354,7 +325,7 @@ Each layer is independently deployable. The MCP plugin and API server share the 
 
 **API server** — ✅ done. CRUD + vector search + AI grading/generation endpoints. Embedding generation (`services/embedding.js`) runs at upload time. `services/grading.js` owns all grading logic (deterministic + AI). `services/adaptiveGenerator.js` handles background content generation.
 
-**App layer** — ✅ CLI done (`app/index.js`). Fetches one item at a time, shows full body on-demand, grades freeText in real-time, prompts user to generate adaptive content when struggling detected. `app/watch.js` is an optional companion watcher that polls for new grades and prints them in a second terminal.
+**App layer** — ✅ CLI done (`app/index.js`). `GET /queue` returns full item bodies — no secondary fetch per item. Shows breadcrumb and explanation. Grades freeText in real-time. Prompts user to generate adaptive content when struggling detected. `app/watch.js` is an optional companion watcher that polls for new grades and prints them in a second terminal.
 
 **Cron + Scheduler** — ✅ fully implemented. Runs on a configurable interval per user:
 1. Grade any ungraded `freeText` responses (fallback for responses missed by real-time grading); grade `ordering` deterministically
@@ -363,8 +334,7 @@ Each layer is independently deployable. The MCP plugin and API server share the 
 4. Unlock next subtopic in linear sort order; retried every tick for recovery
 5. Scheduler handles SR intervals, struggling boost, regression reactivation, round-robin interleave
 6. Graduated-course maintenance: when all subtopics in a course are completed, the scheduler injects semi-random questions from that course (`MAINTENANCE_QUESTIONS_PER_COURSE` per refill) so retention is tested. If accuracy degrades, `reactivateRegressions` fires and the course re-enters the normal active queue automatically.
-7. 🔲 Adaptive content/question generation (cron path) not yet implemented
-8. 🔲 Cloud AI dispatch not yet implemented (local subprocess only)
+7. 🔲 Cloud AI dispatch not yet implemented (local subprocess only)
 
 ---
 
@@ -387,6 +357,7 @@ Located in `.claude/commands/`:
 
 - **`/generate-course`** — Generate a structured course (syllabus → content → questions). Supports new courses, resume, regenerate specific topics, and revise syllabus. Subject scope limit: ~10 topics, ~60 subtopics, ~1000 content/question records.
 - **`/generate-language-course`** — Language-learning specialization of `/generate-course`.
+- **`/generate-program`** — Generate a multi-course learning program document (`programs/{id}.md`). Produces an ordered plan of stages (courses, projects, reviews) for a learning goal; does not generate course content itself.
 
 Resume syntax examples:
 ```

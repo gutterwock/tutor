@@ -5,6 +5,8 @@ const pool = require("../config/db");
  */
 async function upsertRow(row) {
 	const { id, parent_id, level, name, description, prerequisites, exam, sort_order, checksum, embedding } = row;
+	// Ensure exam is serialized as JSON string so pg doesn't pass a bare string to JSONB
+	const examJson = exam == null ? null : (typeof exam === "string" ? JSON.stringify(exam) : exam);
 	const result = await pool.query(
 		`INSERT INTO syllabus (id, parent_id, level, name, description, prerequisites, exam, sort_order, checksum, embedding)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -21,7 +23,7 @@ async function upsertRow(row) {
 		   WHERE syllabus.checksum IS DISTINCT FROM EXCLUDED.checksum
 		 RETURNING id`,
 		[id, parent_id ?? null, level, name, description ?? null,
-			prerequisites ?? [], exam ?? null, sort_order ?? 0, checksum ?? null,
+			prerequisites ?? [], examJson, sort_order ?? 0, checksum ?? null,
 			embedding ?? null]
 	);
 	return result.rowCount > 0;

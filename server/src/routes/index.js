@@ -35,6 +35,7 @@ router.get("/content-views", contentController.getContentViews);
 router.put("/content-views", contentController.updateContentView);
 
 router.get("/progress", progressController.getProgress);
+router.get("/course-progress", progressController.getCourseProgress);
 router.get("/enrollments", progressController.getEnrollments);
 router.get("/struggling", progressController.getStruggling);
 router.post("/generate-adaptive", progressController.generateAdaptive);

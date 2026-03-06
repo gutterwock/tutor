@@ -104,7 +104,7 @@ function phaseScore(tags = []) {
 	return 3; // no phase tag — show last
 }
 
-function buildItemData(type, row) {
+function buildItemData(type, row, breadcrumb) {
 	if (type === "content") {
 		return {
 			type: "content",
@@ -113,6 +113,7 @@ function buildItemData(type, row) {
 			content_type: row.content_type,
 			title: row.title,
 			tags: row.tags,
+			breadcrumb,
 		};
 	}
 	return {
@@ -122,6 +123,7 @@ function buildItemData(type, row) {
 		difficulty: row.difficulty,
 		question_type: row.question_type,
 		tags: row.tags,
+		breadcrumb,
 	};
 }
 
@@ -165,17 +167,19 @@ async function getGraduatedCourseIds(userId) {
 
 // ── Queue builder ─────────────────────────────────────────────────────────────
 
-async function buildQueue(userId) {
+async function buildQueue(userId, weights = {}) {
 	const now = Date.now();
 
 	await reactivateRegressions(userId);
 
 	// Active subtopics
 	const subtopicsRes = await pool.query(
-		`SELECT cp.subtopic_id, cp.syllabus_id AS course_id
+		`SELECT cp.subtopic_id, cp.syllabus_id AS course_id,
+		        c.name AS course_name, t.name AS topic_name, s.name AS subtopic_name
 		 FROM content_progress cp
 		 JOIN syllabus s ON s.id = cp.subtopic_id
 		 JOIN syllabus t ON t.id = s.parent_id
+		 JOIN syllabus c ON c.id = cp.syllabus_id
 		 WHERE cp.user_id = $1 AND cp.active = true AND cp.completed = false
 		 ORDER BY cp.syllabus_id, t.sort_order, s.sort_order`,
 		[userId]
@@ -190,7 +194,8 @@ async function buildQueue(userId) {
 	// Score candidates grouped by course
 	const byCourse = {};
 
-	for (const { subtopic_id, course_id } of subtopicsRes.rows) {
+	for (const { subtopic_id, course_id, course_name, topic_name, subtopic_name } of subtopicsRes.rows) {
+		const breadcrumb = `${course_name}  ›  ${topic_name}  ›  ${subtopic_name}`;
 		// Struggling check for this subtopic
 		const { responseCount, avgCorrectness } =
 			await queueModel.getSubtopicScore(userId, subtopic_id, RESPONSE_WINDOW);
@@ -244,20 +249,25 @@ async function buildQueue(userId) {
 			byCourse[course_id].push({
 				user_id: userId, course_id, subtopic_id,
 				item_type: "content", item_id: c.id,
-				item_data: buildItemData("content", c),
+				item_data: buildItemData("content", c, breadcrumb),
 				priority, is_review: isReview,
 			});
 		}
 
 		// ── Question candidates ──
 		const questionRes = await pool.query(
-			`SELECT id, syllabus_id, difficulty, question_type, tags
+			`SELECT id, syllabus_id, difficulty, question_type, tags, content_ids
 			 FROM question WHERE syllabus_id = $1 AND active = true`,
 			[subtopic_id]
 		);
 
 		for (const q of questionRes.rows) {
 			if (inQueue.has(`question:${q.id}`)) continue;
+
+			// Gating: skip questions whose content blocks have not yet been viewed
+			if (q.content_ids && q.content_ids.length > 0) {
+				if (!q.content_ids.every((id) => contentViews[id])) continue;
+			}
 
 			const qp = questionScores[q.id];
 			let priority, isReview, sr;
@@ -289,34 +299,28 @@ async function buildQueue(userId) {
 			byCourse[course_id].push({
 				user_id: userId, course_id, subtopic_id,
 				item_type: "question", item_id: q.id,
-				item_data: buildItemData("question", q),
+				item_data: buildItemData("question", q, breadcrumb),
 				priority, is_review: isReview,
 			});
 		}
 
-		// TODO: Adaptive content generation for struggling subtopics
-		// When a subtopic is struggling and has no new/due items left, generate
-		// targeted content/questions via AI and insert them (base_content=false).
-		//
-		// const hasNewItems = byCourse[course_id].some(i => i.subtopic_id === subtopic_id && !i.is_review);
-		// if (struggling && !hasNewItems) {
-		//   await generateAdaptiveContent(userId, subtopic_id);  // calls callAI()
-		// }
 	}
 
-	// ── Round-robin interleave across courses ─────────────────────────────────
-	// Sort each course's list by priority, then merge round-robin so courses alternate.
-	const courseQueues = Object.values(byCourse)
-		.map((items) => items.sort((a, b) => a.priority - b.priority));
+	// ── Weighted round-robin interleave across courses ────────────────────────
+	// Sort each course's list by priority, then merge with per-course weights so
+	// a course with weight 2 gets twice as many slots per round as weight 1.
+	const courseQueues = Object.entries(byCourse).map(([courseId, items]) => ({
+		queue:  items.sort((a, b) => a.priority - b.priority),
+		weight: Math.max(1, Math.round(weights[courseId] ?? 1)),
+	}));
 
 	const merged = [];
 	while (merged.length < QUEUE_FILL_TARGET) {
 		let added = false;
-		for (const q of courseQueues) {
-			if (q.length) {
-				merged.push(q.shift());
+		for (const { queue, weight } of courseQueues) {
+			for (let i = 0; i < weight && queue.length && merged.length < QUEUE_FILL_TARGET; i++) {
+				merged.push(queue.shift());
 				added = true;
-				if (merged.length >= QUEUE_FILL_TARGET) break;
 			}
 		}
 		if (!added) break;
@@ -336,9 +340,13 @@ async function buildQueue(userId) {
 		const limit = Math.min(MAINTENANCE_QUESTIONS_PER_COURSE, QUEUE_FILL_TARGET - merged.length);
 
 		const qRes = await pool.query(
-			`SELECT q.id, q.syllabus_id, q.difficulty, q.question_type, q.tags
+			`SELECT q.id, q.syllabus_id, q.difficulty, q.question_type, q.tags,
+			        sub.name AS subtopic_name, top.name AS topic_name, crs.name AS course_name
 			 FROM question q
 			 JOIN content_progress cp ON cp.subtopic_id = q.syllabus_id AND cp.user_id = $1
+			 JOIN syllabus sub ON sub.id = q.syllabus_id
+			 JOIN syllabus top ON top.id = sub.parent_id
+			 JOIN syllabus crs ON crs.id = top.parent_id
 			 WHERE cp.syllabus_id = $2 AND cp.completed = true AND q.active = true
 			 ORDER BY RANDOM()
 			 LIMIT $3`,
@@ -349,13 +357,14 @@ async function buildQueue(userId) {
 		for (const q of qRes.rows) {
 			if (added >= limit) break;
 			if (inQueue.has(`question:${q.id}`)) continue;
+			const bc = `${q.course_name}  ›  ${q.topic_name}  ›  ${q.subtopic_name}`;
 			merged.push({
 				user_id: userId,
 				course_id: courseId,
 				subtopic_id: q.syllabus_id,
 				item_type: "question",
 				item_id: q.id,
-				item_data: buildItemData("question", q),
+				item_data: buildItemData("question", q, bc),
 				priority: 0,   // re-numbered below
 				is_review: true,
 			});
@@ -377,11 +386,11 @@ async function buildQueue(userId) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-async function refillIfNeeded(userId) {
+async function refillIfNeeded(userId, weights = {}) {
 	const size = await queueModel.queueSize(userId);
 	if (size >= QUEUE_LOW_WATERMARK) return { filled: false, added: 0 };
 	const before = size;
-	await buildQueue(userId);
+	await buildQueue(userId, weights);
 	const after = await queueModel.queueSize(userId);
 	return { filled: true, added: after - before };
 }

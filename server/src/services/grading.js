@@ -1,5 +1,5 @@
 /**
- * Deterministic grading for singleChoice, multiChoice, and ordering questions.
+ * Deterministic grading for singleChoice, multiChoice, ordering, and exactMatch questions.
  * freeText AI grading via gradeFreeText (calls the AI service).
  *
  * Used by the response controller, the cron, and the grade-ai endpoint.
@@ -76,14 +76,40 @@ function gradeOrdering(userAnswer, expectedAnswer) {
 	return 0;
 }
 
+function stripAccents(str) {
+	return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+/**
+ * Grade an exactMatch response. Returns 4 if the user's answer matches any
+ * accepted string, 0 otherwise. Respects caseSensitive flag.
+ * Accent-stripped comparison is always tried as a fallback so users who omit
+ * diacritics on answers that contain them are still marked correct.
+ */
+function gradeExactMatch(userAnswer, correctAnswers, caseSensitive = false) {
+	const u = String(userAnswer ?? "").trim();
+	const answers = Array.isArray(correctAnswers) ? correctAnswers : [correctAnswers];
+	const matched = answers.some((a) => {
+		const expected = String(a ?? "").trim();
+		if (caseSensitive) {
+			return u === expected || stripAccents(u) === stripAccents(expected);
+		}
+		return u.toLowerCase() === expected.toLowerCase() ||
+			stripAccents(u).toLowerCase() === stripAccents(expected).toLowerCase();
+	});
+	return matched ? 4 : 0;
+}
+
 /**
  * Grade a response deterministically.
  * Returns null for freeText (needs AI/human assessment).
+ * opts.caseSensitive is only used for exactMatch.
  */
-function gradeResponse(questionType, userAnswer, correctAnswer) {
+function gradeResponse(questionType, userAnswer, correctAnswer, { caseSensitive = false } = {}) {
 	if (questionType === "singleChoice") return gradeSingleChoice(userAnswer, correctAnswer);
 	if (questionType === "multiChoice")  return gradeMultiChoice(userAnswer, correctAnswer);
 	if (questionType === "ordering")     return gradeOrdering(userAnswer, correctAnswer);
+	if (questionType === "exactMatch")   return gradeExactMatch(userAnswer, correctAnswer, caseSensitive);
 	return null; // freeText
 }
 
@@ -97,4 +123,4 @@ function toStringArray(val) {
 	return (Array.isArray(val) ? val : [val]).map((v) => String(v ?? "").trim());
 }
 
-module.exports = { gradeSingleChoice, gradeMultiChoice, gradeOrdering, gradeResponse, gradeFreeText };
+module.exports = { gradeSingleChoice, gradeMultiChoice, gradeOrdering, gradeExactMatch, gradeResponse, gradeFreeText };

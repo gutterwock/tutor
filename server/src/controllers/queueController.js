@@ -1,3 +1,4 @@
+const pool = require("../config/db");
 const queueModel = require("../models/queueModel");
 const contentModel = require("../models/contentModel");
 const scheduler = require("../services/scheduler");
@@ -15,13 +16,51 @@ async function getQueue(req, res) {
 		}
 		const limit = Math.min(parseInt(req.query.limit ?? "10", 10), 100);
 
+		// Parse weights: "course-id:2,other-id:3" → { 'course-id': 2, 'other-id': 3 }
+		const weights = {};
+		if (req.query.weights) {
+			for (const pair of req.query.weights.split(",")) {
+				const colon = pair.lastIndexOf(":");
+				if (colon > 0) {
+					const id = pair.slice(0, colon).trim();
+					const w  = parseInt(pair.slice(colon + 1), 10);
+					if (id && !isNaN(w) && w >= 1) weights[id] = Math.min(w, 10);
+				}
+			}
+		}
+
 		// Refill before responding so the caller always gets fresh items
-		await scheduler.refillIfNeeded(user_id).catch((err) =>
+		await scheduler.refillIfNeeded(user_id, weights).catch((err) =>
 			console.warn("  [queue] refill error:", err.message)
 		);
 
 		const items = await queueModel.peekQueue(user_id, limit);
-		return res.json(items);
+
+		// Bulk-enrich with full body (2 queries max regardless of queue size)
+		const contentIds  = items.filter((i) => i.item_type === "content").map((i) => i.item_id);
+		const questionIds = items.filter((i) => i.item_type === "question").map((i) => i.item_id);
+
+		const [cRows, qRows] = await Promise.all([
+			contentIds.length
+				? pool.query(`SELECT id, body, links, metadata FROM content WHERE id = ANY($1)`, [contentIds])
+				: { rows: [] },
+			questionIds.length
+				? pool.query(`SELECT id, question_text, options, answer, explanation, case_sensitive FROM question WHERE id = ANY($1)`, [questionIds])
+				: { rows: [] },
+		]);
+
+		const contentMap  = Object.fromEntries(cRows.rows.map((r) => [r.id, r]));
+		const questionMap = Object.fromEntries(qRows.rows.map((r) => [r.id, r]));
+
+		const enriched = items.map((item) => ({
+			...item,
+			item_data: {
+				...item.item_data,
+				...(item.item_type === "content" ? contentMap[item.item_id] : questionMap[item.item_id]),
+			},
+		}));
+
+		return res.json(enriched);
 	} catch (err) {
 		console.error("getQueue error:", err);
 		return res.status(500).json({ error: "Internal server error" });
