@@ -4,10 +4,6 @@ description: Generate a structured language course (syllabus, content, questions
 
 # Skill: generate-language-course
 
-## Purpose
-
-Generate a structured language course (syllabus, content, and questions) for the adaptive tutor platform, extending `generate-course` with language-learning-specific behaviors: CEFR-aware scoping, competency-based syllabus design, bilingual content, language-specific question types, and linguistic metadata tagging.
-
 ## Instructions
 
 You are generating a language course for the adaptive learning platform. The user has provided: $ARGUMENTS
@@ -164,7 +160,7 @@ All base tags (`phase:*`) apply. In addition, apply the following language-speci
 
 ### Override: Content Generation
 
-Follow the base skill's step-by-step approach including the review loop and subagent dispatch. When firing subagents, add to step 1 of their prompt: "Also read `.claude/commands/generate-language-course.md` and apply all its overrides." Apply these language-specific content rules:
+Follow the base skill's step-by-step approach including the review loop and subagent dispatch. When firing subagents, append the language-specific content rules and tags below directly into the subagent prompt (do not tell subagents to read this skill file). Apply these language-specific content rules:
 
 **Vocabulary content records:**
 - Each `type:vocabulary-item` record covers **one lexical item** (word, phrase, or fixed expression)
@@ -214,8 +210,6 @@ Follow the base skill's step-by-step approach including the review loop and suba
 
 ### Override: Question Generation
 
-Follow the base skill's step-by-step approach. Apply these language-specific question rules:
-
 **Language question type mapping by phase:**
 
 | Phase | Preferred Question Types | Focus |
@@ -229,69 +223,14 @@ Follow the base skill's step-by-step approach. Apply these language-specific que
 - Every grammar subtopic must include at least: form identification, correct-form selection, error correction, and a sentence-production freeText
 - Integration subtopics must include at least one passage-based comprehension question
 
-**Language-specific question formats:**
+**Language-specific question patterns** (use the base schema format from `docs/structured-question-format.md`):
+- *Translation* — singleChoice: L2→L1 or L1→L2 meaning selection
+- *Fill-in-the-blank* — exactMatch: complete a sentence with the correct form
+- *Error correction* — singleChoice: identify the sentence with a grammatical error
+- *Sentence reconstruction* — ordering: arrange words into correct sentence order
+- *Passage comprehension* — singleChoice with inline L2 passage in the question text
 
-*Translation (singleChoice):*
-```
-### question singleChoice difficulty:1
-tags: phase:atomic, skill:vocabulary, focus:translation
-What does **hablar** mean in English?
-a: to listen
-b: to speak
-c: to write
-d: to read
-answer: b
-```
-
-*Fill-in-the-blank (exactMatch):*
-```
-### question exactMatch difficulty:1
-tags: phase:atomic, skill:grammar, focus:production
-Complete the sentence with the correct form of *hablar*: "Nosotros _____ español todos los días."
-answer: hablamos
-```
-
-*Error correction (singleChoice):*
-```
-### question singleChoice difficulty:2
-tags: phase:complex, skill:grammar, focus:error-correction
-Which sentence contains an error?
-a: Ella habla español.
-b: Ella hablo español.
-c: Ella habla inglés.
-d: Nosotros hablamos.
-answer: b
-```
-
-*Sentence reconstruction (ordering):*
-```
-### question ordering difficulty:2
-tags: phase:complex, skill:grammar, focus:production
-Put the words in the correct order to form a sentence:
-a: español
-b: hablo
-c: yo
-d: bien
-answer: cbad
-```
-
-*Passage comprehension (singleChoice with inline text):*
-```
-### question singleChoice difficulty:2
-tags: phase:integration, skill:reading, focus:comprehension
-Read the following and answer:
-
-*María va al mercado todos los sábados. Compra frutas, verduras y a veces flores para su casa.*
-
-Why does María go to the market?
-a: To buy clothes
-b: To buy food and flowers
-c: To meet friends
-d: To sell produce
-answer: b
-```
-
-**Distractor quality rule:** singleChoice distractors for language questions must be plausible — use related vocabulary, common conjugation errors, or near-synonyms. Never use obviously wrong distractors.
+**Distractor quality rule:** singleChoice distractors must be plausible — use related vocabulary, common conjugation errors, or near-synonyms. Never use obviously wrong distractors.
 
 ---
 
@@ -309,17 +248,9 @@ In addition to base distribution targets (3–5 content records per phase per su
 
 All base constraints apply, plus:
 
-- Never omit translations — every target-language string in a content body must have an inline English (or L1) translation
-- Do not generate audio content — describe listening content as transcripts or spoken scenario descriptions (text only; omit the `type:` line in content block headers)
-- Do not invent grammar rules — use standard, well-attested linguistic descriptions for the target language
-- Do not generate IPA for languages where IPA transcription would be unreliable or where a simpler phonetic system is standard (e.g. for Chinese, use pinyin; for Japanese, use romaji alongside kana)
 - All example sentences must be grammatically correct in the target language
-- Register-mark all example sentences and vocabulary items — never leave register ambiguous
-- For exam-focused courses, all integration questions must match the item format of the target exam (e.g. JLPT uses only singleChoice; DELE writing uses freeText with extended rubric hints in the `answer` field)
-- Media enrichment does not add topics, subtopics, or dedicated content records for studying the work itself — it only enriches examples within standard records
-- Do not reproduce song lyrics verbatim; use themes and vocabulary to construct original example sentences
-- If a specified work is significantly above the course level, note this in the vocabulary item's body (e.g. "This word appears in [Title], which is aimed at [higher level] learners — it's a useful preview") but still include it if the word itself is level-appropriate
-- Never fabricate quotes attributed to a specific work — if the exact wording is uncertain, write an original sentence inspired by the work's themes and omit the attribution
+- For exam-focused courses, integration questions must match the target exam's item format (e.g. JLPT = singleChoice only; DELE writing = freeText with rubric hints)
+- Never fabricate quotes attributed to a specific work — write original sentences inspired by the work's themes if the exact wording is uncertain
 
 ---
 

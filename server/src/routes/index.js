@@ -15,6 +15,7 @@ router.get("/health", (req, res) => {
 router.get("/syllabus", syllabusController.getSyllabus);
 router.post("/syllabus/upload", syllabusController.uploadSyllabus);
 router.post("/syllabus/enroll", syllabusController.enrollInSyllabus);
+router.delete("/syllabus/enroll", syllabusController.unenrollFromSyllabus);
 
 router.get("/content/:id",  contentController.getContentItem);
 router.get("/content",      contentController.getContent);
@@ -41,6 +42,7 @@ router.get("/struggling", progressController.getStruggling);
 router.post("/generate-adaptive", progressController.generateAdaptive);
 
 router.get("/queue",        queueController.getQueue);
+router.delete("/queue",     queueController.clearCourseQueue);
 router.delete("/queue/:id", queueController.deleteQueueItem);
 
 

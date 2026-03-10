@@ -34,8 +34,8 @@ async function uploadContent(req, res) {
 			}))
 		);
 
-		const ids = await contentModel.replaceBaseContent(syllabusId, rows);
-		return res.status(200).json({ syllabus_id: syllabusId, count: ids.length, ids });
+		const { ids, inserted, skipped } = await contentModel.replaceBaseContent(syllabusId, rows);
+		return res.status(200).json({ syllabus_id: syllabusId, count: ids.length, inserted, skipped, ids });
 	} catch (err) {
 		console.error("uploadContent error:", err);
 		return res.status(500).json({ error: "Internal server error" });

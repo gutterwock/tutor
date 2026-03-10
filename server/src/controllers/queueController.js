@@ -29,12 +29,15 @@ async function getQueue(req, res) {
 			}
 		}
 
+		const sessionLength = req.query.session_length ? parseInt(req.query.session_length, 10) : 0;
+		const questionOnly = req.query.question_only === "true";
+
 		// Refill before responding so the caller always gets fresh items
-		await scheduler.refillIfNeeded(user_id, weights).catch((err) =>
+		await scheduler.refillIfNeeded(user_id, weights, sessionLength, questionOnly).catch((err) =>
 			console.warn("  [queue] refill error:", err.message)
 		);
 
-		const items = await queueModel.peekQueue(user_id, limit);
+		const items = await queueModel.peekQueue(user_id, limit, questionOnly ? "question" : null);
 
 		// Bulk-enrich with full body (2 queries max regardless of queue size)
 		const contentIds  = items.filter((i) => i.item_type === "content").map((i) => i.item_id);
@@ -94,4 +97,22 @@ async function deleteQueueItem(req, res) {
 	}
 }
 
-module.exports = { getQueue, deleteQueueItem };
+/**
+ * DELETE /queue?user_id=&course_id=
+ * Removes all queue items for a user/course pair (called when a course is paused).
+ */
+async function clearCourseQueue(req, res) {
+	try {
+		const { user_id, course_id } = req.query;
+		if (!user_id || !course_id) {
+			return res.status(400).json({ error: "Missing required query params: user_id, course_id" });
+		}
+		await queueModel.clearCourseItems(user_id, course_id);
+		return res.json({ cleared: true, course_id });
+	} catch (err) {
+		console.error("clearCourseQueue error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+module.exports = { getQueue, deleteQueueItem, clearCourseQueue };

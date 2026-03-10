@@ -6,25 +6,40 @@ const pool = require("../config/db");
  * Return the next `limit` ready items for a user, ordered by priority ASC.
  * `item_data` contains the full denormalized content or question record.
  */
-async function peekQueue(userId, limit = 10) {
-	const result = await pool.query(
-		`SELECT id, user_id, course_id, subtopic_id, item_type, item_id,
-		        item_data, priority, is_review, created_at
-		 FROM study_queue
-		 WHERE user_id = $1
-		 ORDER BY priority ASC, created_at ASC
-		 LIMIT $2`,
-		[userId, limit]
-	);
+async function peekQueue(userId, limit = 10, itemType = null) {
+	const result = itemType
+		? await pool.query(
+			`SELECT id, user_id, course_id, subtopic_id, item_type, item_id,
+			        item_data, priority, is_review, created_at
+			 FROM study_queue
+			 WHERE user_id = $1 AND item_type = $3
+			 ORDER BY priority ASC, created_at ASC
+			 LIMIT $2`,
+			[userId, limit, itemType]
+		)
+		: await pool.query(
+			`SELECT id, user_id, course_id, subtopic_id, item_type, item_id,
+			        item_data, priority, is_review, created_at
+			 FROM study_queue
+			 WHERE user_id = $1
+			 ORDER BY priority ASC, created_at ASC
+			 LIMIT $2`,
+			[userId, limit]
+		);
 	return result.rows;
 }
 
-/** Count of items in the queue for a user. */
-async function queueSize(userId) {
-	const result = await pool.query(
-		`SELECT COUNT(*) AS count FROM study_queue WHERE user_id = $1`,
-		[userId]
-	);
+/** Count of items in the queue for a user. Optionally filtered to a specific item_type. */
+async function queueSize(userId, itemType = null) {
+	const result = itemType
+		? await pool.query(
+			`SELECT COUNT(*) AS count FROM study_queue WHERE user_id = $1 AND item_type = $2`,
+			[userId, itemType]
+		)
+		: await pool.query(
+			`SELECT COUNT(*) AS count FROM study_queue WHERE user_id = $1`,
+			[userId]
+		);
 	return parseInt(result.rows[0].count, 10);
 }
 
@@ -45,32 +60,29 @@ async function getQueuedItemKeys(userId) {
 /**
  * Bulk-insert queue items. ON CONFLICT DO NOTHING makes this idempotent —
  * items already in the queue are untouched.
+ * Uses a single multi-row INSERT for efficiency.
  */
 async function insertItems(items) {
 	if (!items.length) return;
-	const client = await pool.connect();
-	try {
-		await client.query("BEGIN");
-		for (const item of items) {
-			await client.query(
-				`INSERT INTO study_queue
-				   (user_id, course_id, subtopic_id, item_type, item_id, item_data, priority, is_review)
-				 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-				 ON CONFLICT (user_id, item_type, item_id) DO NOTHING`,
-				[
-					item.user_id, item.course_id, item.subtopic_id,
-					item.item_type, item.item_id, JSON.stringify(item.item_data),
-					item.priority, item.is_review ?? false,
-				]
-			);
-		}
-		await client.query("COMMIT");
-	} catch (err) {
-		await client.query("ROLLBACK");
-		throw err;
-	} finally {
-		client.release();
+	const values = [];
+	const params = [];
+	let p = 1;
+	for (const item of items) {
+		values.push(`($${p},$${p+1},$${p+2},$${p+3},$${p+4},$${p+5}::jsonb,$${p+6},$${p+7})`);
+		params.push(
+			item.user_id, item.course_id, item.subtopic_id,
+			item.item_type, item.item_id, JSON.stringify(item.item_data),
+			item.priority, item.is_review ?? false,
+		);
+		p += 8;
 	}
+	await pool.query(
+		`INSERT INTO study_queue
+		   (user_id, course_id, subtopic_id, item_type, item_id, item_data, priority, is_review)
+		 VALUES ${values.join(",")}
+		 ON CONFLICT (user_id, item_type, item_id) DO NOTHING`,
+		params,
+	);
 }
 
 /**
@@ -92,6 +104,14 @@ async function clearSubtopicItems(userId, subtopicId) {
 	await pool.query(
 		`DELETE FROM study_queue WHERE user_id = $1 AND subtopic_id = $2`,
 		[userId, subtopicId]
+	);
+}
+
+/** Clear all queue items for a course (used on unenroll). */
+async function clearCourseItems(userId, courseId) {
+	await pool.query(
+		`DELETE FROM study_queue WHERE user_id = $1 AND course_id = $2`,
+		[userId, courseId]
 	);
 }
 
@@ -177,6 +197,6 @@ async function getContentViews(userId, subtopicIds) {
 
 module.exports = {
 	peekQueue, queueSize, getQueuedItemKeys,
-	insertItems, deleteItem, clearSubtopicItems,
+	insertItems, deleteItem, clearSubtopicItems, clearCourseItems,
 	getSubtopicScore, getQuestionScores, getContentViews,
 };

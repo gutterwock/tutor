@@ -1,0 +1,7 @@
+{
+  "interleave_courses": true,
+  "interleave_subtopics": true,
+  "disabled_courses": [],
+  "course_weights": {},
+  "session_length": 10
+}

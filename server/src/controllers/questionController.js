@@ -34,8 +34,8 @@ async function uploadQuestions(req, res) {
 			}))
 		);
 
-		const ids = await questionModel.replaceBaseQuestions(syllabusId, rows);
-		return res.status(200).json({ syllabus_id: syllabusId, count: ids.length, ids });
+		const { ids, inserted, skipped } = await questionModel.replaceBaseQuestions(syllabusId, rows);
+		return res.status(200).json({ syllabus_id: syllabusId, count: ids.length, inserted, skipped, ids });
 	} catch (err) {
 		console.error("uploadQuestions error:", err);
 		return res.status(500).json({ error: "Internal server error" });

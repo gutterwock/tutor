@@ -1,5 +1,7 @@
 const crypto = require("crypto");
 const syllabusModel = require("../models/syllabusModel");
+const progressModel = require("../models/progressModel");
+const queueModel = require("../models/queueModel");
 const { generateEmbedding, pgVector } = require("../services/embedding");
 
 /**
@@ -184,4 +186,24 @@ async function enrollInSyllabus(req, res) {
 	}
 }
 
-module.exports = { uploadSyllabus, getSyllabus, enrollInSyllabus };
+/**
+ * DELETE /syllabus/enroll
+ * Body: { user_id, course_id }
+ * Removes all content_progress rows and queue items for the user/course.
+ */
+async function unenrollFromSyllabus(req, res) {
+	try {
+		const { user_id, course_id } = req.body;
+		if (!user_id || !course_id) {
+			return res.status(400).json({ error: "Missing required fields: user_id, course_id" });
+		}
+		await queueModel.clearCourseItems(user_id, course_id);
+		await progressModel.unenroll(user_id, course_id);
+		return res.status(200).json({ unenrolled: true, course_id });
+	} catch (err) {
+		console.error("unenrollFromSyllabus error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+module.exports = { uploadSyllabus, getSyllabus, enrollInSyllabus, unenrollFromSyllabus };

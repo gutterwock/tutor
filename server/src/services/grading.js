@@ -43,18 +43,11 @@ function gradeMultiChoice(userAnswer, correctAnswer) {
 	const user    = toStringSet(userAnswer);
 	const correct = toStringSet(correctAnswer);
 	if (correct.size === 0) return 0;
-
-	let hits = 0;
-	for (const v of user) {
-		if (correct.has(v)) hits++;
+	if (user.size !== correct.size) return 0;
+	for (const v of correct) {
+		if (!user.has(v)) return 0;
 	}
-
-	const ratio = hits / correct.size;
-	if (ratio >= 1.0)  return 4;
-	if (ratio >= 0.75) return 3;
-	if (ratio >= 0.5)  return 2;
-	if (ratio > 0)     return 1;
-	return 0;
+	return 4;
 }
 
 function gradeOrdering(userAnswer, expectedAnswer) {
@@ -62,18 +55,7 @@ function gradeOrdering(userAnswer, expectedAnswer) {
 	const expected = toStringArray(expectedAnswer);
 
 	if (user.length === 0) return 0;
-	if (JSON.stringify(user) === JSON.stringify(expected)) return 4;
-
-	let correct = 0;
-	for (let i = 0; i < Math.min(user.length, expected.length); i++) {
-		if (user[i].toLowerCase() === expected[i].toLowerCase()) correct++;
-	}
-
-	const ratio = correct / expected.length;
-	if (ratio >= 0.75) return 3;
-	if (ratio >= 0.5)  return 2;
-	if (ratio > 0)     return 1;
-	return 0;
+	return JSON.stringify(user.map(v => v.toLowerCase())) === JSON.stringify(expected.map(v => v.toLowerCase())) ? 4 : 0;
 }
 
 function stripAccents(str) {

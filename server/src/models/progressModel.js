@@ -32,4 +32,14 @@ async function getEnrolledCourses(userId) {
 	return result.rows;
 }
 
-module.exports = { getActiveSubtopics, getEnrolledCourses };
+/**
+ * Remove all content_progress rows for a user/course (unenroll).
+ */
+async function unenroll(userId, courseId) {
+	await pool.query(
+		`DELETE FROM content_progress WHERE user_id = $1 AND syllabus_id = $2`,
+		[userId, courseId]
+	);
+}
+
+module.exports = { getActiveSubtopics, getEnrolledCourses, unenroll };

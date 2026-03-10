@@ -1,24 +1,43 @@
 const pool = require("../config/db");
+const { contentId } = require("../utils/deterministicId");
 
 /**
- * Delete all base_content=true rows for a subtopic and insert fresh rows.
- * Adaptive content (base_content=false) is never touched.
+ * Set-diff upsert: compute deterministic IDs, delete removed records,
+ * insert new records. Unchanged records (same ID already in DB) are untouched,
+ * preserving content_view history. Adaptive content (base_content=false) is never touched.
  */
 async function replaceBaseContent(syllabusId, rows) {
+	// Attach deterministic IDs
+	const rowsWithIds = rows.map((row) => ({
+		...row,
+		id: contentId(row.syllabus_id, row.title, row.body),
+	}));
+
 	const client = await pool.connect();
 	try {
-		await client.query("BEGIN");
-		await client.query(
-			`DELETE FROM content WHERE syllabus_id = $1 AND base_content = true`,
+		// Fetch existing base IDs before starting the transaction
+		const existingResult = await client.query(
+			`SELECT id FROM content WHERE syllabus_id = $1 AND base_content = true`,
 			[syllabusId]
 		);
-		const ids = [];
-		for (const row of rows) {
-			const result = await client.query(
-				`INSERT INTO content (syllabus_id, active, base_content, content_type, title, body, tags, links, embedding, metadata)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-				 RETURNING id`,
+		const existingIds = new Set(existingResult.rows.map((r) => r.id));
+		const incomingIds = new Set(rowsWithIds.map((r) => r.id));
+
+		const toDelete = [...existingIds].filter((id) => !incomingIds.has(id));
+		const toInsert = rowsWithIds.filter((row) => !existingIds.has(row.id));
+
+		await client.query("BEGIN");
+
+		if (toDelete.length > 0) {
+			await client.query(`DELETE FROM content WHERE id = ANY($1)`, [toDelete]);
+		}
+
+		for (const row of toInsert) {
+			await client.query(
+				`INSERT INTO content (id, syllabus_id, active, base_content, content_type, title, body, tags, links, embedding, metadata)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				[
+					row.id,
 					row.syllabus_id,
 					row.active ?? true,
 					true,
@@ -31,10 +50,14 @@ async function replaceBaseContent(syllabusId, rows) {
 					JSON.stringify(row.metadata ?? {}),
 				]
 			);
-			ids.push(result.rows[0].id);
 		}
+
 		await client.query("COMMIT");
-		return ids;
+		return {
+			ids: rowsWithIds.map((r) => r.id),
+			inserted: toInsert.length,
+			skipped: rowsWithIds.length - toInsert.length,
+		};
 	} catch (err) {
 		await client.query("ROLLBACK");
 		throw err;

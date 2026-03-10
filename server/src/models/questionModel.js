@@ -1,24 +1,43 @@
 const pool = require("../config/db");
+const { questionId } = require("../utils/deterministicId");
 
 /**
- * Delete all base_content=true questions for a subtopic and insert fresh rows.
+ * Set-diff upsert: compute deterministic IDs, delete removed records,
+ * insert new records. Unchanged records (same ID already in DB) are untouched.
  * Adaptive questions (base_content=false) are never touched.
  */
 async function replaceBaseQuestions(syllabusId, rows) {
+	// Attach deterministic IDs (content_ids already resolved to real UUIDs by the controller)
+	const rowsWithIds = rows.map((row) => ({
+		...row,
+		id: questionId(row.syllabus_id, row.question_text, row.answer, row.content_ids ?? []),
+	}));
+
 	const client = await pool.connect();
 	try {
-		await client.query("BEGIN");
-		await client.query(
-			`DELETE FROM question WHERE syllabus_id = $1 AND base_content = true`,
+		// Fetch existing base IDs before starting the transaction
+		const existingResult = await client.query(
+			`SELECT id FROM question WHERE syllabus_id = $1 AND base_content = true`,
 			[syllabusId]
 		);
-		const ids = [];
-		for (const row of rows) {
-			const result = await client.query(
-				`INSERT INTO question (syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, tags, content_ids, case_sensitive, embedding)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-				 RETURNING id`,
+		const existingIds = new Set(existingResult.rows.map((r) => r.id));
+		const incomingIds = new Set(rowsWithIds.map((r) => r.id));
+
+		const toDelete = [...existingIds].filter((id) => !incomingIds.has(id));
+		const toInsert = rowsWithIds.filter((row) => !existingIds.has(row.id));
+
+		await client.query("BEGIN");
+
+		if (toDelete.length > 0) {
+			await client.query(`DELETE FROM question WHERE id = ANY($1)`, [toDelete]);
+		}
+
+		for (const row of toInsert) {
+			await client.query(
+				`INSERT INTO question (id, syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, tags, content_ids, case_sensitive, embedding)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 				[
+					row.id,
 					row.syllabus_id,
 					row.active ?? true,
 					true,
@@ -34,10 +53,14 @@ async function replaceBaseQuestions(syllabusId, rows) {
 					row.embedding ?? null,
 				]
 			);
-			ids.push(result.rows[0].id);
 		}
+
 		await client.query("COMMIT");
-		return ids;
+		return {
+			ids: rowsWithIds.map((r) => r.id),
+			inserted: toInsert.length,
+			skipped: rowsWithIds.length - toInsert.length,
+		};
 	} catch (err) {
 		await client.query("ROLLBACK");
 		throw err;

@@ -22,7 +22,7 @@
  *
  * Environment variables:
  *   QUEUE_LOW_WATERMARK     Items remaining that trigger a refill  (default: 10)
- *   QUEUE_FILL_TARGET       Items to add per refill pass           (default: 30)
+ *   QUEUE_FILL_TARGET       Items to add per refill pass           (default: 500)
  *   RESPONSE_WINDOW         Last N responses used for SR/struggle  (default: 10)
  *   STRUGGLING_THRESHOLD    Avg correctness below = struggling     (default: 1.5)
  *   MIN_RESPONSES_STRUGGLE  Min responses before struggle fires    (default: 3)
@@ -34,7 +34,7 @@ const pool = require("../config/db");
 const queueModel = require("../models/queueModel");
 
 const QUEUE_LOW_WATERMARK    = parseInt(process.env.QUEUE_LOW_WATERMARK    || "10",  10);
-const QUEUE_FILL_TARGET      = parseInt(process.env.QUEUE_FILL_TARGET      || "30",  10);
+const QUEUE_FILL_TARGET      = parseInt(process.env.QUEUE_FILL_TARGET      || "500", 10);
 const RESPONSE_WINDOW        = parseInt(process.env.RESPONSE_WINDOW        || "10",  10);
 const STRUGGLING_THRESHOLD   = parseFloat(process.env.STRUGGLING_THRESHOLD  || "1.5");
 const MIN_RESPONSES_STRUGGLE = parseInt(process.env.MIN_RESPONSES_STRUGGLE || "3",   10);
@@ -167,7 +167,7 @@ async function getGraduatedCourseIds(userId) {
 
 // ── Queue builder ─────────────────────────────────────────────────────────────
 
-async function buildQueue(userId, weights = {}) {
+async function buildQueue(userId, weights = {}, minTarget = 0, questionOnly = false) {
 	const now = Date.now();
 
 	await reactivateRegressions(userId);
@@ -213,6 +213,7 @@ async function buildQueue(userId, weights = {}) {
 		if (!byCourse[course_id]) byCourse[course_id] = [];
 
 		// ── Content candidates ──
+		if (!questionOnly) {
 		const contentRes = await pool.query(
 			`SELECT id, syllabus_id, content_type, title, tags
 			 FROM content WHERE syllabus_id = $1 AND active = true`,
@@ -253,6 +254,7 @@ async function buildQueue(userId, weights = {}) {
 				priority, is_review: isReview,
 			});
 		}
+		} // end if (!questionOnly)
 
 		// ── Question candidates ──
 		const questionRes = await pool.query(
@@ -314,11 +316,12 @@ async function buildQueue(userId, weights = {}) {
 		weight: Math.max(1, Math.round(weights[courseId] ?? 1)),
 	}));
 
+	const fillTarget = Math.max(QUEUE_FILL_TARGET, minTarget);
 	const merged = [];
-	while (merged.length < QUEUE_FILL_TARGET) {
+	while (merged.length < fillTarget) {
 		let added = false;
 		for (const { queue, weight } of courseQueues) {
-			for (let i = 0; i < weight && queue.length && merged.length < QUEUE_FILL_TARGET; i++) {
+			for (let i = 0; i < weight && queue.length && merged.length < fillTarget; i++) {
 				merged.push(queue.shift());
 				added = true;
 			}
@@ -336,8 +339,8 @@ async function buildQueue(userId, weights = {}) {
 
 	for (const courseId of graduatedIds) {
 		if (activeCourseSet.has(courseId)) continue; // regression already reactivated a subtopic
-		if (merged.length >= QUEUE_FILL_TARGET) break;
-		const limit = Math.min(MAINTENANCE_QUESTIONS_PER_COURSE, QUEUE_FILL_TARGET - merged.length);
+		if (merged.length >= fillTarget) break;
+		const limit = Math.min(MAINTENANCE_QUESTIONS_PER_COURSE, fillTarget - merged.length);
 
 		const qRes = await pool.query(
 			`SELECT q.id, q.syllabus_id, q.difficulty, q.question_type, q.tags,
@@ -386,12 +389,13 @@ async function buildQueue(userId, weights = {}) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-async function refillIfNeeded(userId, weights = {}) {
-	const size = await queueModel.queueSize(userId);
-	if (size >= QUEUE_LOW_WATERMARK) return { filled: false, added: 0 };
+async function refillIfNeeded(userId, weights = {}, minTarget = 0, questionOnly = false) {
+	const effectiveWatermark = Math.max(QUEUE_LOW_WATERMARK, minTarget);
+	const size = await queueModel.queueSize(userId, questionOnly ? "question" : null);
+	if (size >= effectiveWatermark) return { filled: false, added: 0 };
 	const before = size;
-	await buildQueue(userId, weights);
-	const after = await queueModel.queueSize(userId);
+	await buildQueue(userId, weights, minTarget, questionOnly);
+	const after = await queueModel.queueSize(userId, questionOnly ? "question" : null);
 	return { filled: true, added: after - before };
 }
 

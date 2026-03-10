@@ -592,7 +592,7 @@ async function uploadContent(records, subtopicId) {
 		return records.map((_, i) => `dry-run-${subtopicId}-content-${i}`);
 	}
 	const result = await post(`${baseUrl}/content`, records);
-	log(`    content   ${subtopicId}  count=${result.count}`);
+	log(`    content   ${subtopicId}  inserted=${result.inserted} skipped=${result.skipped}`);
 	return result.ids; // ordered UUIDs matching input record order
 }
 
@@ -620,7 +620,7 @@ async function uploadQuestions(records, subtopicId, contentIds = []) {
 		return;
 	}
 	const result = await post(`${baseUrl}/questions`, resolved);
-	log(`    questions ${subtopicId}  count=${result.count}`);
+	log(`    questions ${subtopicId}  inserted=${result.inserted} skipped=${result.skipped}`);
 }
 
 // ---------------------------------------------------------------------------

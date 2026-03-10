@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
 	interleave_subtopics: true, // study all active subtopics per session (vs. one at a time)
 	disabled_courses: [],       // course IDs temporarily excluded from study sessions
 	course_weights: {},         // course ID → integer multiplier (default 1, omitted if 1)
+	session_length: null,       // null = unlimited; number = max shown items per session
 };
 
 // ── persistence ───────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 const pause = () => ask("\nPress Enter to continue...");
 const on = (v) => (v ? "ON " : "OFF");
 const hr = () => console.log("\n" + "─".repeat(60));
+const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const clear = () => process.stdout.write("\x1Bc");
 
 function progressBar(completed, total, width = 20) {
@@ -75,6 +77,8 @@ async function settingsMenu(settings) {
 		console.log("Settings\n");
 		console.log(`  1.  Interleave courses    [${on(settings.interleave_courses)}]  — mix subtopics from all courses in one session`);
 		console.log(`  2.  Interleave subtopics  [${on(settings.interleave_subtopics)}]  — study all active subtopics per session vs. one at a time`);
+		const sl = settings.session_length;
+		console.log(`  3.  Session length        [${sl ? sl + " items" : "unlimited"}]  — items shown per session (0 to clear)`);
 		console.log("\n  b.  Back");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
@@ -84,6 +88,13 @@ async function settingsMenu(settings) {
 		} else if (input === "2") {
 			settings.interleave_subtopics = !settings.interleave_subtopics;
 			saveSettings(settings);
+		} else if (input === "3") {
+			const raw = (await ask("  Session length (number of items, or 0 for unlimited): ")).trim();
+			const n = parseInt(raw, 10);
+			if (!isNaN(n) && n >= 0) {
+				settings.session_length = n === 0 ? null : n;
+				saveSettings(settings);
+			}
 		} else if (input === "b" || input === "") {
 			return;
 		}
@@ -141,6 +152,7 @@ async function showCourseProgress(userId, course, settings) {
 		const weight = settings.course_weights[course.id] ?? 1;
 		console.log(`\n  p.  ${paused ? "Resume" : "Pause"} this course`);
 		console.log(`  w.  Set weight  (currently ${weight}×)`);
+		console.log("  u.  Unenroll from this course");
 		console.log("  b.  Back");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
@@ -152,6 +164,7 @@ async function showCourseProgress(userId, course, settings) {
 				console.log(`\n  "${course.name}" resumed.`);
 			} else {
 				settings.disabled_courses.push(course.id);
+				await api("DELETE", `/queue?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`).catch(() => {});
 				console.log(`\n  "${course.name}" paused.`);
 			}
 			saveSettings(settings);
@@ -171,6 +184,18 @@ async function showCourseProgress(userId, course, settings) {
 				console.log("\n  Invalid — enter a number between 1 and 5.");
 			}
 			await pause();
+		} else if (input === "u") {
+			const confirm = (await ask(`\n  Unenroll from "${course.name}"? This cannot be undone. (y/N) `)).trim().toLowerCase();
+			if (confirm === "y") {
+				await api("DELETE", "/syllabus/enroll", { user_id: userId, course_id: course.id });
+				const di = settings.disabled_courses.indexOf(course.id);
+				if (di >= 0) settings.disabled_courses.splice(di, 1);
+				delete settings.course_weights[course.id];
+				saveSettings(settings);
+				console.log(`\n  Unenrolled from "${course.name}".`);
+				await pause();
+				return;
+			}
 		}
 	}
 }
@@ -251,53 +276,105 @@ async function askQuestion(data) {
 	let userAnswer;
 	let correctness = 0;
 
+	const validKeys = data.options ? Object.keys(data.options).map((k) => k.toLowerCase()) : [];
+
 	if (data.question_type === "singleChoice") {
 		console.log(formatOptions(data.options) + "\n");
-		const input = (await ask("Answer: ")).trim().toLowerCase();
+		let input;
+		while (true) {
+			input = (await ask("Answer: ")).trim().toLowerCase();
+			if (input && validKeys.includes(input)) break;
+			console.log(`  Enter one of: ${validKeys.join(", ")}`);
+		}
 		userAnswer = input;
 		const isCorrect = input === String(data.answer).toLowerCase();
 		correctness = isCorrect ? 4 : 0;
-		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — answer: ${data.answer}`);
+		if (isCorrect) {
+			console.log("\n  ✓ Correct!");
+		} else {
+			const correctText = data.options?.[data.answer] ? `${data.answer}) ${data.options[data.answer]}` : data.answer;
+			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
+		}
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "multiChoice") {
 		console.log(formatOptions(data.options) + "\n");
-		const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim().toLowerCase();
-		userAnswer = input.split(",").map((s) => s.trim()).filter(Boolean);
+		let parts;
+		while (true) {
+			const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim().toLowerCase();
+			parts = input.split(",").map((s) => s.trim()).filter(Boolean);
+			if (parts.length > 0 && parts.every((k) => validKeys.includes(k))) break;
+			console.log(`  Enter one or more of: ${validKeys.join(", ")}`);
+		}
+		userAnswer = parts;
 		const expected = (Array.isArray(data.answer) ? data.answer : [data.answer]).map((v) => String(v).trim().toLowerCase());
-		const isCorrect =
-			JSON.stringify([...userAnswer].sort()) === JSON.stringify([...expected].sort());
+		const isCorrect = JSON.stringify([...userAnswer].sort()) === JSON.stringify([...expected].sort());
 		correctness = isCorrect ? 4 : 0;
-		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — answer: ${expected.join(", ")}`);
+		if (isCorrect) {
+			console.log("\n  ✓ Correct!");
+		} else {
+			const correctText = expected.map((k) => data.options?.[k] ? `${k}) ${data.options[k]}` : k).join(", ");
+			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
+		}
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "exactMatch") {
-		const input = (await ask("Answer: ")).trim();
+		let input;
+		while (true) {
+			input = (await ask("Answer: ")).trim();
+			if (input) break;
+			console.log("  Please enter an answer.");
+		}
 		userAnswer = input;
 		const answers = Array.isArray(data.answer) ? data.answer : [data.answer];
-		const isCorrect = answers.some((a) =>
-			data.case_sensitive ? input === String(a).trim() : input.toLowerCase() === String(a).trim().toLowerCase()
-		);
+		const isCorrect = answers.some((a) => {
+			const expected = String(a).trim();
+			if (data.case_sensitive) {
+				return input === expected || stripAccents(input) === stripAccents(expected);
+			}
+			return input.toLowerCase() === expected.toLowerCase() ||
+				stripAccents(input).toLowerCase() === stripAccents(expected).toLowerCase();
+		});
 		correctness = isCorrect ? 4 : 0;
 		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — accepted: ${answers.join(" / ")}`);
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "ordering") {
 		console.log(formatOptions(data.options) + "\n");
-		const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim().toLowerCase();
-		userAnswer = input.split(",").map((s) => s.trim()).filter(Boolean);
-		console.log("\n  Response recorded.");
+		let parts;
+		while (true) {
+			const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim().toLowerCase();
+			parts = input.split(",").map((s) => s.trim()).filter(Boolean);
+			if (parts.length === validKeys.length && parts.every((k) => validKeys.includes(k))) break;
+			console.log(`  Enter all ${validKeys.length} keys in order: ${validKeys.join(", ")}`);
+		}
+		userAnswer = parts;
+		const expected = (Array.isArray(data.answer) ? data.answer : []).map((k) => String(k).toLowerCase());
+		correctness = JSON.stringify(userAnswer) === JSON.stringify(expected) ? 4 : 0;
+		const correctOrder = (Array.isArray(data.answer) ? data.answer : [])
+			.map((k) => data.options?.[k] ? `${k}) ${data.options[k]}` : k).join(" → ");
+		if (correctness === 4) {
+			console.log("\n  ✓ Correct!");
+		} else {
+			console.log(`\n  ✗ Incorrect — correct order: ${correctOrder}`);
+		}
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else {
 		// freeText
-		userAnswer = await ask("Answer: ");
+		let input;
+		while (true) {
+			input = await ask("Answer: ");
+			if (input.trim()) break;
+			console.log("  Please enter an answer.");
+		}
+		userAnswer = input;
 	}
 
 	return { correctness, userAnswer };
 }
 
-async function studySession(userId, settings) {
+async function studySession(userId, settings, questionOnly = false) {
 	// Determine which courses to include
 	const enrolled = await api("GET", `/enrollments?user_id=${userId}`);
 	const enabledCourses = enrolled.filter((c) => !settings.disabled_courses.includes(c.id));
@@ -331,7 +408,12 @@ async function studySession(userId, settings) {
 		.map(([id, w]) => `${id}:${w}`)
 		.join(",");
 	const weightsQuery = weightParam ? `&weights=${encodeURIComponent(weightParam)}` : "";
-	let items = await api("GET", `/queue?user_id=${userId}&limit=50${weightsQuery}`);
+	const sessionLimit = settings.session_length ?? null;
+	// Over-fetch slightly to account for empty-body content items that are consumed silently
+	const fetchLimit = sessionLimit ? Math.min(sessionLimit + 20, 100) : 50;
+	const sessionLengthQuery = sessionLimit ? `&session_length=${sessionLimit}` : "";
+	const questionOnlyQuery = questionOnly ? "&question_only=true" : "";
+	let items = await api("GET", `/queue?user_id=${userId}&limit=${fetchLimit}${weightsQuery}${sessionLengthQuery}${questionOnlyQuery}`);
 
 	// Filter to enabled courses
 	items = items.filter((item) => activeCourseIds.includes(item.course_id));
@@ -354,29 +436,40 @@ async function studySession(userId, settings) {
 
 	// Label: show "review" tag if any items are reviews
 	const hasReview = items.some((i) => i.is_review);
-	console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
+	if (sessionLimit) {
+		console.log(`\nSession: up to ${sessionLimit} item${sessionLimit > 1 ? "s" : ""}${hasReview ? " (includes review)" : ""}`);
+	} else {
+		console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
+	}
 	await pause();
 
 	let correct = 0;
 	let total = 0;
+	let shownCount = 0;
 
 	for (const item of items) {
+		if (sessionLimit && shownCount >= sessionLimit) break;
+
 		clear();
 		if (item.item_data.breadcrumb) console.log(`\n  ${item.item_data.breadcrumb}\n`);
 		const data = item.item_data;
 
 		if (item.item_type === "content") {
-			await showContent(data);
-			// DELETE triggers content_view upsert server-side
+			if (data.body && data.body.trim()) {
+				await showContent(data);
+				shownCount++;
+			}
+			// DELETE triggers content_view upsert server-side (even for empty-body parent records)
 			await api("DELETE", `/queue/${item.id}`).catch(() => {});
 
 		} else {
+			shownCount++;
 			hr();
 			let { correctness, userAnswer } = await askQuestion(data);
 			// Submit response before dequeuing so a crash between the two leaves the item in queue
-			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true) and ordering (deterministic)
+			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true)
 			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
-			if (data.question_type === "singleChoice" || data.question_type === "multiChoice" || data.question_type === "exactMatch") submitBody.correctness = correctness;
+			if (data.question_type !== "freeText") submitBody.correctness = correctness;
 			const submitted = await api("POST", "/responses", submitBody);
 
 			if (submitted.needs_grading) {
@@ -394,11 +487,13 @@ async function studySession(userId, settings) {
 					console.log("  (Grading failed — will be retried by server.)");
 				}
 				await pause();
+			} else {
+				await pause();
 			}
 
 			await api("DELETE", `/queue/${item.id}`).catch(() => {});
 
-			if (data.question_type === "singleChoice" || data.question_type === "multiChoice" || data.question_type === "exactMatch") {
+			if (data.question_type !== "freeText") {
 				if (correctness === 4) correct++;
 				total++;
 			}
@@ -441,19 +536,22 @@ async function main() {
 	while (true) {
 		clear();
 		console.log(`tutor.ai  (user: ${userId.slice(0, 8)}…)\n`);
-		console.log("  1.  Study");
-		console.log("  2.  Manage courses");
-		console.log("  3.  Settings");
-		console.log("  4.  Quit");
+		console.log("  1.  Study  ← Enter");
+		console.log("  2.  Quiz");
+		console.log("  3.  Manage courses");
+		console.log("  4.  Settings");
+		console.log("  5.  Quit");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
-		if (input === "1") {
+		if (input === "1" || input === "") {
 			await studySession(userId, settings);
 		} else if (input === "2") {
-			await manageCoursesMenu(userId, settings);
+			await studySession(userId, settings, true);
 		} else if (input === "3") {
+			await manageCoursesMenu(userId, settings);
+		} else if (input === "4") {
 			await settingsMenu(settings);
-		} else if (input === "4" || input === "q") {
+		} else if (input === "5" || input === "q") {
 			break;
 		}
 	}
