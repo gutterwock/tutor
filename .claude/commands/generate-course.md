@@ -151,7 +151,7 @@ Default batch size is **3 subtopics in parallel**. The user may override this at
 
 Collect all remaining subtopic IDs within the boundary (excluding already-written files and those generated in the review loop). Dispatch in batches of the current batch size: fire one Agent tool call per subtopic in a single message (parallel), wait for all to complete, then fire the next batch.
 
-Each subagent receives this prompt (fill in `{}` placeholders — the orchestrator extracts these from the already-loaded syllabus, no file read needed by the subagent):
+Each subagent should use `model: "sonnet"`. Each subagent receives this prompt (fill in `{}` placeholders — the orchestrator extracts these from the already-loaded syllabus, no file read needed by the subagent):
 
 > Generate one subtopic file for the adaptive learning platform.
 >

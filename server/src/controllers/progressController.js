@@ -63,7 +63,7 @@ async function getStruggling(req, res) {
 			 JOIN syllabus c ON c.id = t.parent_id
 			 JOIN LATERAL (
 			   SELECT COUNT(*)::int AS response_count,
-			          AVG(r.correctness)::float AS avg_correctness
+			          AVG(recent.correctness)::float AS avg_correctness
 			   FROM (
 			     SELECT r.correctness
 			     FROM response r

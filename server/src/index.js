@@ -6,6 +6,7 @@ const morgan = require("morgan");
 const hpp = require("hpp");
 const routes = require("./routes/index");
 const cron = require("./services/cron");
+const pool = require("./config/db");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,7 +28,15 @@ app.use(
 
 app.use("/", routes);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
 	console.log(`Server running on port ${PORT}`);
 	cron.startCron();
+});
+
+process.on("SIGTERM", () => {
+	console.log("[shutdown] SIGTERM received");
+	cron.stopCron();
+	server.close(() => {
+		pool.end(() => process.exit(0));
+	});
 });
