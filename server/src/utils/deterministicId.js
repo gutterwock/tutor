@@ -28,9 +28,10 @@ function contentId(syllabusId, title, body) {
 	return uuidv5(`content:${syllabusId}:${title}:${body}`);
 }
 
-function questionId(syllabusId, questionText, answer, contentIds) {
+function questionId(syllabusId, questionText, answer, contentIds, passage) {
 	const sortedIds = [...contentIds].sort();
-	return uuidv5(`question:${syllabusId}:${questionText}:${JSON.stringify(answer)}:${JSON.stringify(sortedIds)}`);
+	const base = `question:${syllabusId}:${questionText}:${JSON.stringify(answer)}:${JSON.stringify(sortedIds)}`;
+	return uuidv5(passage ? `${base}:${passage}` : base);
 }
 
 module.exports = { uuidv5, contentId, questionId };

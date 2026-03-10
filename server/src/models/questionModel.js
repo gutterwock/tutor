@@ -10,7 +10,7 @@ async function replaceBaseQuestions(syllabusId, rows) {
 	// Attach deterministic IDs (content_ids already resolved to real UUIDs by the controller)
 	const rowsWithIds = rows.map((row) => ({
 		...row,
-		id: questionId(row.syllabus_id, row.question_text, row.answer, row.content_ids ?? []),
+		id: questionId(row.syllabus_id, row.question_text, row.answer, row.content_ids ?? [], row.passage ?? null),
 	}));
 
 	const client = await pool.connect();
@@ -34,8 +34,8 @@ async function replaceBaseQuestions(syllabusId, rows) {
 
 		for (const row of toInsert) {
 			await client.query(
-				`INSERT INTO question (id, syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, tags, content_ids, case_sensitive, embedding)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+				`INSERT INTO question (id, syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, passage, tags, content_ids, case_sensitive, embedding)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 				[
 					row.id,
 					row.syllabus_id,
@@ -47,6 +47,7 @@ async function replaceBaseQuestions(syllabusId, rows) {
 					JSON.stringify(row.options ?? null),
 					JSON.stringify(row.answer),
 					row.explanation ?? null,
+					row.passage ?? null,
 					row.tags ?? [],
 					row.content_ids ?? [],
 					row.caseSensitive ?? false,

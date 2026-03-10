@@ -78,6 +78,7 @@ CREATE TABLE question (
     options        JSONB,
     answer         JSONB NOT NULL,
     explanation    TEXT,                -- optional: shown after answering; for counterintuitive answers only
+    passage        TEXT,               -- body of linked content block (show_with_content questions only)
     tags           TEXT[] DEFAULT '{}',
     content_ids    UUID[] DEFAULT '{}', -- content blocks that must be viewed before this question is shown; [] = ungated
     case_sensitive BOOLEAN NOT NULL DEFAULT false,  -- exactMatch only

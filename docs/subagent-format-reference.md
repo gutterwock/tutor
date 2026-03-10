@@ -43,7 +43,7 @@ A `###` question belongs to the nearest preceding `##` block. A `###` before any
 **Authoring rule — questions must be self-contained:**
 - Every question must be answerable without having just read its linked content block. It tests long-term recall, not immediate reading comprehension.
 - Content blocks must teach the concept broadly. They must **not** give instructions on how to answer questions or directly scaffold a linked question (e.g., avoid "note that the answer is X" or "consider the following scenario and answer below").
-- If a question requires a specific passage or table to be readable (e.g., a reading-comprehension or data-interpretation question), include that passage **inside the question text itself** and place the question **before any `##` block** (ungated), not after a content block.
+- If a question requires a specific passage to be readable (e.g., a reading-comprehension or data-interpretation question), add `show_with_content: true` after the `tags:` line. The linked content block's body will be shown above the question at display time. Only use this for genuine data-interpretation or passage-comprehension questions where the question is literally unanswerable without the passage.
 
 ## Phase ordering
 

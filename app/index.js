@@ -271,6 +271,11 @@ async function showContent(data) {
  * Grading logic is identical to the previous quizSubtopic function.
  */
 async function askQuestion(data) {
+	if (data.passage) {
+		console.log('\n--- Context ---');
+		console.log(data.passage);
+		console.log('---------------');
+	}
 	console.log(`\n\n\n${data.question_text}\n`);
 
 	let userAnswer;

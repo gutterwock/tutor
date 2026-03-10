@@ -49,6 +49,43 @@ A brief explanation shown to the user after answering. Supports inline markdown 
 
 **Use sparingly** — only for questions where the correct answer is genuinely counterintuitive, where a common misconception makes a wrong option plausible, or where the reasoning is not obvious from the question alone. The vast majority of questions should not have an explanation; if the question is well-written it should be self-evident why the answer is correct.
 
+## show_with_content (optional)
+
+```
+show_with_content: true
+```
+
+Placed after the `tags:` line. When set to `true`, the body of the nearest preceding content block is copied into a `passage` field on the question and displayed above the question text at study time.
+
+**When to use:** Only for genuine data-interpretation or reading-comprehension questions where the question is literally unanswerable without reading a specific table, chart, or text excerpt. Examples: "Based on the table above, which region had the highest growth?" or "According to the passage, what is the author's main claim?"
+
+**Do not use** for ordinary recall or application questions that happen to follow a content block. If the question tests long-term knowledge (not immediate passage comprehension), it should be self-contained.
+
+**Only valid** when the question is gated on a content block (i.e., it follows a `##` block, not placed ungated before the first `##`).
+
+### Example
+
+```markdown
+## [phase:complex] Regional Sales Summary
+
+tags: focus:data-analysis
+
+| Region | Q1 | Q2 | Q3 | Q4 |
+|--------|----|----|----|----|
+| North  | 120 | 135 | 128 | 142 |
+| South  | 98  | 102 | 115 | 109 |
+| East   | 145 | 139 | 160 | 171 |
+
+### question singleChoice difficulty:2
+tags: phase:complex, focus:data-analysis
+show_with_content: true
+Based on the table, which region had the highest Q4 sales?
+a: North
+b: South
+c: East
+answer: c
+```
+
 ---
 
 ## Examples

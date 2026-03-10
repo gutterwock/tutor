@@ -50,12 +50,18 @@ class CourseValidator {
             difficulty: parseInt(match[2]),
             lineStart: lineNum,
             tags: [],
+            questionTextLines: [],
             options: {},
             answers: [],
             answer: null,
             explanation: null,
           };
         }
+      } else if (/^## (?!#)/.test(line)) {
+        // Content block heading — terminate current question to prevent its tags:
+        // line from overwriting the question's tags.
+        if (current) this.questions.push(current);
+        current = null;
       } else if (current) {
         if (line.startsWith('tags:')) {
           current.tags = line.replace('tags:', '').trim().split(',').map(t => t.trim());
@@ -71,6 +77,8 @@ class CourseValidator {
           if (key.length === 1 && key.match(/^[a-z]$/)) {
             current.options[key] = val.trim();
           }
+        } else if (!line.startsWith('show_with_content:') && line.trim() !== '') {
+          current.questionTextLines.push(line);
         }
       }
     }
@@ -165,7 +173,8 @@ class CourseValidator {
     const seen = new Map();
     this.questions.forEach((q, idx) => {
       const answerKey = q.type === 'exactMatch' ? JSON.stringify([...q.answers].sort()) : q.answer;
-      const key = JSON.stringify([q.type, q.options, answerKey]);
+      const questionText = (q.questionTextLines ?? []).join(' ');
+      const key = JSON.stringify([q.type, q.options, answerKey, questionText]);
       if (seen.has(key)) {
         this.warnings.push(
           `Q${idx + 1} (line ${q.lineStart}): Appears to be a duplicate of Q${seen.get(key) + 1}`

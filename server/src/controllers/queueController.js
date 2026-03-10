@@ -48,7 +48,7 @@ async function getQueue(req, res) {
 				? pool.query(`SELECT id, body, links, metadata FROM content WHERE id = ANY($1)`, [contentIds])
 				: { rows: [] },
 			questionIds.length
-				? pool.query(`SELECT id, question_text, options, answer, explanation, case_sensitive FROM question WHERE id = ANY($1)`, [questionIds])
+				? pool.query(`SELECT id, question_text, options, answer, explanation, case_sensitive, passage FROM question WHERE id = ANY($1)`, [questionIds])
 				: { rows: [] },
 		]);
 

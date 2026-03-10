@@ -77,6 +77,8 @@ Check:
 3. Are the wrong options actually wrong (no trick questions with multiple valid answers)?
 4. Do difficulty ratings match the question complexity (0=recall, 1=recognition, 2=application, 3=analysis, 4=synthesis)?
 5. Are explanations accurate?
+6. If any question has `show_with_content: true`: verify it genuinely requires the passage to answer (data-interpretation or passage-dependent), not just a recall question that happens to follow a content block.
+7. If a question is passage-dependent (cannot be answered without reading a specific table, diagram, or text excerpt), verify it has `show_with_content: true` set.
 
 Return ONLY a list of issues with line numbers, or "No issues found" if the file is clean. Be concise.
 ```

@@ -241,7 +241,15 @@ function parseSubtopicMarkdown(source) {
 			currentContentNonPhaseTags = block.tags; // tags: line only has non-phase tags
 			content.push(buildContentRecord(block, syllabusId));
 		} else if (block.type === "question") {
-			questions.push(buildQuestionRecord(block, syllabusId));
+			const q = buildQuestionRecord(block, syllabusId);
+			if (block.showWithContent) {
+				if (block.contentBlockIdx >= 0 && content[block.contentBlockIdx]) {
+					q.passage = content[block.contentBlockIdx].body;
+				} else {
+					warn(`  show_with_content: true on ungated question in ${syllabusId} — no preceding content block; flag ignored`);
+				}
+			}
+			questions.push(q);
 		}
 		block = null;
 		inFence = false;
@@ -290,6 +298,7 @@ function parseSubtopicMarkdown(source) {
 					questionType: m[1],
 					difficulty: parseInt(m[2], 10),
 					caseSensitive: /caseSensitive/.test(line),
+					showWithContent: false,
 					tags: [],
 					// Content→question linking: captured at question creation time
 					contentBlockIdx,               // -1 = ungated; ≥0 = index into content[]
@@ -419,6 +428,9 @@ function processQuestionLine(block, line) {
 			block.explanation = line.slice("explanation:".length).trim();
 			block.state = "done";
 			return;
+		} else if (line.startsWith("show_with_content:")) {
+			block.showWithContent = line.slice("show_with_content:".length).trim() === "true";
+			return;
 		} else {
 			block.questionTextLines.push(line);
 			return;
@@ -504,6 +516,7 @@ function buildQuestionRecord(block, syllabusId) {
 		question_text: questionText,
 		answer,
 		tags,
+		caseSensitive: block.caseSensitive,
 		// _contentBlockIdx is a temporary index resolved to a real UUID by the upload flow.
 		// -1 = ungated (diagnostic question before any content block).
 		_contentBlockIdx: block.contentBlockIdx,
