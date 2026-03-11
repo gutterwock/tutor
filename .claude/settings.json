@@ -1,8 +1,13 @@
 {
   "permissions": {
     "allow": [
+      "Read(.claude/**)",
       "Edit(courseData/**)",
-      "Write(courseData/**)"
+      "Read(courseData/**)",
+      "Write(courseData/**)",
+      "Edit(programs/**)",
+      "Read(programs/**)",
+      "Write(programs/**)"
     ]
   }
 }
