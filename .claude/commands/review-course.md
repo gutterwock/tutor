@@ -38,7 +38,6 @@ Run `node scripts/review-courses.js <course-id>` via Bash. This catches structur
 - Ordering answer length mismatches
 - Duplicate questions
 - Missing phase tags
-- Missing explanations on freeText
 
 Report the script output to the user. If there are errors, fix them before proceeding to Pass 2.
 
