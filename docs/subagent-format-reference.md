@@ -29,6 +29,8 @@ answer: b              ← see answer formats below
 explanation: text      ← optional; use sparingly
 ```
 
+**`caseSensitive`** — only use when capitalisation is itself the tested concept (e.g. a command or syntax that must be typed exactly). Do not use for proper nouns, technical terms, or named concepts where the meaning is what matters.
+
 **Answer formats:**
 - `singleChoice` — `answer: b`
 - `multiChoice` — `answer: abc` (concatenated keys, no separator)

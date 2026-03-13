@@ -101,75 +101,17 @@ b: An entity representing a person or application
 c: A group of permissions
 d: A temporary credential
 answer: b
+explanation: Only use explanation when the answer is counterintuitive.
 ```
 
-### singleChoice — true/false
-
-```markdown
-### question singleChoice difficulty:1
-tags: phase:atomic
-IAM roles use long-term static credentials.
-a: True
-b: False
-answer: b
-```
-
-### singleChoice — assertion/reason
-
-```markdown
-### question singleChoice difficulty:3
-tags: phase:integration
-**Assertion:** IAM roles are preferred over IAM users for EC2 instances.
-**Reason:** IAM roles provide temporary credentials that are automatically rotated.
-a: Both assertion and reason are true, and the reason correctly explains the assertion
-b: Both assertion and reason are true, but the reason does not explain the assertion
-c: The assertion is true but the reason is false
-d: The assertion is false but the reason is true
-e: Both assertion and reason are false
-answer: a
-```
-
-### singleChoice — with diagram
-
-````markdown
-### question singleChoice difficulty:2
-tags: phase:complex
-Given this flow, which component handles authentication?
-
-```mermaid
-graph LR
-  Client --> ALB
-  ALB --> Cognito
-  ALB --> App
-```
-
-a: ALB
-b: Cognito
-c: App
-d: Client
-answer: b
-````
-
-### singleChoice — with explanation
-
-```markdown
-### question singleChoice difficulty:2
-tags: phase:complex
-Which STS API call lets an IAM user assume a role in the same account?
-a: AssumeRoleWithWebIdentity
-b: AssumeRole
-c: GetSessionToken
-d: DecodeAuthorizationMessage
-answer: b
-explanation: `GetSessionToken` is for MFA-protected API calls, not role assumption. `AssumeRoleWithWebIdentity` is for federated web identities. `AssumeRole` works for same-account and cross-account role assumption.
-```
+singleChoice variants: true/false (2 options `a: True` / `b: False`), assertion/reason (5 options a–e), best-answer, exception-based ("which is NOT…").
 
 ### multiChoice
 
 ```markdown
 ### question multiChoice difficulty:2
 tags: phase:complex
-Which of the following are valid IAM principal types? (select all that apply)
+Which are valid IAM principal types? (select all that apply)
 a: IAM Users
 b: IAM Groups
 c: IAM Roles
@@ -182,7 +124,7 @@ answer: abc
 ```markdown
 ### question ordering difficulty:2
 tags: phase:complex
-Put the following steps in order to grant cross-account access using IAM roles:
+Order the steps to grant cross-account access using IAM roles:
 a: Attach permission policies to the role
 b: Create an IAM role in the target account
 c: Define a trust policy specifying the source account
@@ -195,11 +137,11 @@ answer: bcad
 ```markdown
 ### question freeText difficulty:3
 tags: phase:integration
-Explain the difference between IAM roles and IAM users, and when you would use each.
-answer: IAM users are long-term identities with static credentials assigned to people or applications. IAM roles are temporary identities assumed by trusted entities — used for cross-account access, EC2 instance profiles, Lambda execution, and identity federation.
+Explain the difference between IAM roles and IAM users.
+answer: IAM users are long-term identities with static credentials. IAM roles are temporary identities assumed via STS — used for cross-account access, instance profiles, Lambda, and federation.
 ```
 
-### exactMatch — case-insensitive (default)
+### exactMatch
 
 ```markdown
 ### question exactMatch difficulty:1
@@ -210,15 +152,7 @@ answer: 看见
 answer: kàn
 ```
 
-### exactMatch — case-sensitive
-
-```markdown
-### question exactMatch caseSensitive difficulty:1
-tags: phase:atomic
-Write a pipeline that counts lines.
-answer: cat file | wc -l
-answer: wc -l < file
-```
+Add `caseSensitive` after `exactMatch` when case matters: `### question exactMatch caseSensitive difficulty:1`
 
 ---
 

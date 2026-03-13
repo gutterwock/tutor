@@ -160,11 +160,6 @@ class CourseValidator {
       if (!hasPhaseTag) {
         this.warnings.push(`${qLabel}: Missing phase tag (phase:atomic, phase:complex, or phase:integration)`);
       }
-
-      // Warn if freeText has no explanation
-      if (q.type === 'freeText' && !q.explanation) {
-        this.warnings.push(`${qLabel}: freeText question should have an explanation for grading reference`);
-      }
     });
   }
 

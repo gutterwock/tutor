@@ -23,7 +23,7 @@ The user has provided: $ARGUMENTS
 
 If the user is clearly ahead, compress and skip checks. Skip a phase if it has no content.
 
-**Close.** Only flag concepts the user struggled with. Skip recap unless they ask.
+**Close.** Only flag concepts the user struggled with. Skip recap unless they ask. Then look up the next subtopic in the syllabus and ask: "Ready for {next-subtopic-name}, or done for now?" If they continue, suggest starting a new conversation with `/teach {next-subtopic-id}` to keep context clean.
 
 ## Examples
 
