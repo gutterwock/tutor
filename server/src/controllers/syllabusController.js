@@ -146,7 +146,8 @@ async function getSyllabus(req, res) {
  * POST /syllabus/enroll
  * Body: { user_id, course_id }
  * Creates content_progress rows for all subtopics under the course.
- * The first subtopic is active=true; the rest are false (to be unlocked by cron).
+ * Bulk-inserts all content + question items into study_queue at priority -1 (locked).
+ * Then promotes up to 5 ungated items from the first subtopic to tier 3 (bias: 374–399).
  */
 async function enrollInSyllabus(req, res) {
 	try {
@@ -167,6 +168,7 @@ async function enrollInSyllabus(req, res) {
 
 		const pool = require("../config/db");
 		let enrolled = 0;
+
 		for (let i = 0; i < subtopics.length; i++) {
 			const sub = subtopics[i];
 			const active = i === 0;
@@ -177,6 +179,45 @@ async function enrollInSyllabus(req, res) {
 				[user_id, course_id, sub.id, active]
 			);
 			if (result.rowCount > 0) enrolled++;
+		}
+
+		// Bulk-insert all content + question items at priority -1 (locked)
+		const subtopicIds = subtopics.map((s) => s.id);
+
+		const [contentRes, questionRes] = await Promise.all([
+			pool.query(`SELECT id, syllabus_id FROM content WHERE syllabus_id = ANY($1) AND active = true`, [subtopicIds]),
+			pool.query(`SELECT id, syllabus_id FROM question WHERE syllabus_id = ANY($1) AND active = true`, [subtopicIds]),
+		]);
+
+		const allItems = [
+			...contentRes.rows.map((r) => ({
+				user_id, course_id, subtopic_id: r.syllabus_id,
+				item_type: "content", item_id: r.id,
+			})),
+			...questionRes.rows.map((r) => ({
+				user_id, course_id, subtopic_id: r.syllabus_id,
+				item_type: "question", item_id: r.id,
+			})),
+		];
+
+		await queueModel.insertLocked(allItems);
+
+		// Promote up to 5 ungated items from the first active subtopic (bias rand 374–399)
+		if (subtopics.length > 0) {
+			await queueModel.promoteSubtopicItems(user_id, subtopics[0].id, 74);
+
+			// Cap at 5: demote any excess back to normal tier 3 range
+			await pool.query(
+				`UPDATE study_queue
+				 SET priority = 300 + floor(random() * 74)::int
+				 WHERE id IN (
+				   SELECT id FROM study_queue
+				   WHERE user_id = $1 AND subtopic_id = $2 AND priority BETWEEN 374 AND 399
+				   ORDER BY priority DESC
+				   OFFSET 5
+				 )`,
+				[user_id, subtopics[0].id]
+			);
 		}
 
 		return res.status(200).json({ enrolled, total_subtopics: subtopics.length });

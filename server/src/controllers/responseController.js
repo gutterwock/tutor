@@ -1,5 +1,6 @@
 const pool = require("../config/db");
 const responseModel = require("../models/responseModel");
+const queueModel = require("../models/queueModel");
 const { gradeResponse, gradeFreeText } = require("../services/grading");
 const { runPipeline } = require("../services/pipeline");
 
@@ -53,6 +54,7 @@ async function submitResponse(req, res) {
 				return res.status(400).json({ error: "correctness must be an integer 0–4" });
 			}
 			const row = await responseModel.submitResponse(question_id, user_id, user_answer, correctness);
+			await queueModel.transitionQuestionTier(user_id, question_id, correctness).catch(() => {});
 			const pipeline = await runPipeline(user_id);
 			return res.status(201).json({ ...row, needs_grading: false, pipeline });
 		}
@@ -81,6 +83,7 @@ async function submitResponse(req, res) {
 		// Deterministic grading for singleChoice / multiChoice / ordering / exactMatch
 		correctness = gradeResponse(q.question_type, user_answer, q.answer, { caseSensitive: q.case_sensitive }) ?? 0;
 		const row = await responseModel.submitResponse(question_id, user_id, user_answer, correctness);
+		await queueModel.transitionQuestionTier(user_id, question_id, correctness).catch(() => {});
 		const pipeline = await runPipeline(user_id);
 		return res.status(201).json({ ...row, needs_grading: false, pipeline });
 	} catch (err) {
@@ -115,6 +118,7 @@ async function gradeResponseHandler(req, res) {
 			return res.status(404).json({ error: `Response ${id} not found` });
 		}
 
+		await queueModel.transitionQuestionTier(user_id, row.question_id, score).catch(() => {});
 		const pipeline = await runPipeline(user_id);
 		return res.json({ ...row, pipeline });
 	} catch (err) {
@@ -156,6 +160,7 @@ async function gradeResponseAI(req, res) {
 
 		const score = await gradeFreeText(r.question_text, r.answer, r.user_answer);
 		const row = await responseModel.setGrade(id, score);
+		await queueModel.transitionQuestionTier(user_id, r.question_id, score).catch(() => {});
 		const pipeline = await runPipeline(user_id);
 		return res.json({ ...row, pipeline });
 	} catch (err) {

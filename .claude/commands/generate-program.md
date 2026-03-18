@@ -14,7 +14,7 @@ Extract: **goal** (what to achieve), **prior knowledge** (default: "none assumed
 
 ### Output
 
-Write to `programs/{program-id}.md` (lowercase hyphenated slug). If file exists, ask: overwrite, modify, or rename. Create `programs/` if needed. Do not generate course content.
+Write to `courseData/{program-id}/program.md` (lowercase hyphenated slug). The program-id becomes the **group folder** under `courseData/` — courses generated for this program will be written to `courseData/{program-id}/{course-id}/`. If the file exists, ask: overwrite, modify, or rename. Create the directory if needed. Do not generate course content.
 
 ---
 
@@ -34,11 +34,11 @@ Write to `programs/{program-id}.md` (lowercase hyphenated slug). If file exists,
 
 **4. Stages:** Ordered list. Each stage is one of:
 
-- **Course:** `Type: Course`, `Course ID:`, `Scope:` (1–3 sentences), `Prerequisites: Stage N` (advisory), `Estimated subtopics: ~N`, `Notes:` (optional)
+- **Course:** `Type: Course`, `Course ID: {program-id}/{course-id}`, `Scope:` (1–3 sentences), `Prerequisites: Stage N` (advisory), `Estimated subtopics: ~N`, `Notes:` (optional)
 - **Project:** `Type: Project`, `Scope:` (enough detail to execute), `Prerequisites:`, `Estimated duration:`, `Outcomes:` (bullet list)
 - **Review:** `Type: Review`, `Scope: Spaced repetition over Stages X–Y`, `Prerequisites:`
 
-**5. Course Generation Guide:** List each course stage with ID, scope, and prerequisites. User picks the skill (`/generate-course`, `/generate-language-course`). Projects/reviews need no generation.
+**5. Course Generation Guide:** List each course stage with the full nested path (`{program-id}/{course-id}`), scope, and prerequisites. User picks the skill (`/generate-course {program-id}/{course-id}`, `/generate-language-course {program-id}/{course-id}`). Projects/reviews need no generation.
 
 ---
 
@@ -55,8 +55,8 @@ Write to `programs/{program-id}.md` (lowercase hyphenated slug). If file exists,
 ### Interaction Flow
 
 1. Parse input; clarify if ambiguous
-2. Check for existing file; ask if found
-3. Generate and write the document
+2. Check if `courseData/{program-id}/program.md` exists; ask if found
+3. Generate and write the document to `courseData/{program-id}/program.md`
 4. Show summary: program ID, stage counts, ordered list, any flags
 5. Ask for approval; revise until approved
-6. On approval, remind user of the generation guide
+6. On approval, remind user to generate courses with `/generate-course {program-id}/{course-id}`

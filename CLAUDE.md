@@ -63,14 +63,16 @@ npm run dev             # start with nodemon (auto-restart)
 ### Ingest course data
 
 ```bash
-node scripts/ingest.js                        # all courses
-node scripts/ingest.js aws-security-specialty # one course
-node scripts/ingest.js --dry-run              # preview without hitting server
-node scripts/ingest.js --base-url http://host:3000 <course-id>
-node scripts/ingest.js --convert-only         # parse markdown → JSON files in courseData/{id}/converted/
+node scripts/ingest.js                              # all courses
+node scripts/ingest.js aws-security-specialty       # one direct course
+node scripts/ingest.js japanese/japanese-n5         # nested course (group/course-id)
+node scripts/ingest.js japanese                     # all courses in a group
+node scripts/ingest.js --dry-run                    # preview without hitting server
+node scripts/ingest.js --base-url http://host:3000 <ref>
+node scripts/ingest.js --convert-only               # parse markdown → JSON files in courseData/{ref}/converted/
 ```
 
-Parses and uploads `courseData/` files (markdown or legacy JSON) to the running API server: syllabus first, then content and questions per subtopic. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
+Parses and uploads `courseData/` files (markdown or legacy JSON) to the running API server: syllabus first, then content and questions per subtopic. Supports both direct (`courseData/{course-id}/`) and nested (`courseData/{group}/{course-id}/`) layouts. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
 
 ### Tests
 
@@ -80,7 +82,7 @@ npx jest                # run all tests
 npx jest <file>         # run a single test file
 ```
 
-No tests are currently written. Jest is installed; test files go in `server/__tests__/`.
+Test files are in `server/__tests__/`. Current coverage: `grading.test.js` (28 tests), `queueModel.test.js` (24 tests), `pipeline.test.js` (23 tests) — 75 tests total, all passing.
 
 ## Architecture
 
@@ -89,9 +91,11 @@ No tests are currently written. Jest is installed; test files go in `server/__te
 ```
 database/       PostgreSQL 17 + pgvector image; schema.sql auto-runs on first start
 server/         Express.js API server (Node.js) + cron adaptive engine
+  __tests__/    Jest unit tests: grading.test.js, queueModel.test.js, pipeline.test.js
 app/            CLI study client (Node.js, no dependencies)
 courseData/     Course source files (markdown primary; legacy JSON also supported)
-programs/       Multi-course learning programs (markdown). Each file defines a sequence of stages (courses, projects, reviews) with scope, prerequisites, and course IDs. Used as input when generating courses with /generate-course.
+  {course-id}/           direct course layout
+  {group}/{course-id}/   grouped layout (for program-organised courses)
 docs/           Format specs for course authoring (syllabus, subtopic, content, question formats)
 scripts/        ingest.js loads courseData/ into the API server; course-status.js checks generation progress
 prompt/         Schema reference and API endpoint definitions for AI context
@@ -107,12 +111,12 @@ prompt/         Schema reference and API endpoint definitions for AI context
 - **`services/ai.js`** — AI dispatch abstraction. `callAI(prompt)` spawns `claude --model $AI_MODEL -p` as a subprocess (local mode). Cloud mode is a TODO stub. Controlled by `AI_MODE` env var (default: `local`); model by `AI_MODEL` (default: `claude-haiku-4-5-20251001`).
 - **`services/grading.js`** — All grading logic: deterministic (`gradeSingleChoice`, `gradeMultiChoice`, `gradeOrdering`) and AI-based (`gradeFreeText` — calls `callAI`). Used by the response controller, cron, and `grade-ai` endpoint.
 - **`services/adaptiveGenerator.js`** — Adaptive content/question generation for struggling subtopics. Fetches context + recent wrong answers, calls `callAI`, parses JSON response, persists items as `base_content=false`. Runs once per subtopic (guards against re-triggering). Called via `POST /generate-adaptive` at the user's prompt at session end.
-- **`services/cron.js`** — Adaptive engine. Runs on `setInterval` (default 60s). Per-user pipeline: grade ungraded responses → check subtopic completion → refill study queue → unlock next subtopics. Concurrency-safe: skips a tick if the previous one is still running. Acts as fallback grader for any responses missed by real-time grading.
-- **`services/scheduler.js`** — Builds and maintains the per-user `study_queue`. Priority-scored with bit-packed integers (phase → type → difficulty → review → SR score). Handles spaced repetition intervals, struggling detection, regression reactivation, and round-robin course interleaving. Called by `getQueue` (eager) and cron (background).
+- **`services/cron.js`** — Adaptive engine. Runs on `setInterval` (default 60s). Per-user pipeline: grade ungraded responses → check subtopic completion → unlock next subtopics → detect regression on completed subtopics. Concurrency-safe: skips a tick if the previous one is still running. Acts as fallback grader for any responses missed by real-time grading.
+- **`services/pipeline.js`** — `isSubtopicComplete` (all content viewed + avg correctness ≥ threshold) and `unlockNextForCourse` (linear subtopic unlock). Called by the cron and by `DELETE /queue/:id` (content consumption path).
 - **`controllers/`** — `syllabusController`, `contentController`, `questionController`, `responseController`, `progressController`, `queueController` — all implemented.
 - **`models/`** — `syllabusModel`, `contentModel`, `questionModel`, `responseModel`, `progressModel`, `queueModel` — all implemented.
 
-### Cron / scheduler environment variables
+### Cron / pipeline environment variables
 
 | Var | Default | Purpose |
 |-----|---------|---------|
@@ -121,14 +125,11 @@ prompt/         Schema reference and API endpoint definitions for AI context
 | `AI_MODE` | `local` | `local` = claude subprocess; `cloud` = TODO |
 | `AI_MODEL` | `claude-haiku-4-5-20251001` | Model passed to `claude --model` for grading and generation |
 | `AI_TIMEOUT_MS` | `60000` | Timeout for the claude subprocess (ms) |
-| `QUEUE_LOW_WATERMARK` | `10` | Remaining items that trigger a queue refill |
-| `QUEUE_FILL_TARGET` | `30` | Items to add per refill pass |
-| `RESPONSE_WINDOW` | `10` | Last N responses used for SR / struggling detection |
+| `RESPONSE_WINDOW` | `10` | Last N responses used for completion / struggling checks |
 | `STRUGGLING_THRESHOLD` | `1.5` | Avg correctness below this = struggling |
 | `MIN_RESPONSES_STRUGGLE` | `3` | Min responses before struggling fires |
 | `REGRESSION_THRESHOLD` | `1.5` | Avg correctness below this = regressed (reactivates completed subtopic) |
 | `MIN_RESPONSES_REGRESS` | `5` | Min responses before regression fires |
-| `MAINTENANCE_QUESTIONS_PER_COURSE` | `5` | Questions per graduated course added to each queue refill (maintenance mode) |
 
 ### API Endpoints
 
@@ -142,7 +143,7 @@ prompt/         Schema reference and API endpoint definitions for AI context
 | GET | `/enrollments` | All courses a user is enrolled in (`?user_id=`) |
 | GET | `/struggling` | Struggling subtopics for a user (`?user_id=`); returns name, course, avg correctness |
 | POST | `/generate-adaptive` | Trigger background adaptive content+question generation for a subtopic (`{ user_id, subtopic_id }`) |
-| GET | `/queue` | Next study items for a user (`?user_id=&limit=`); triggers refill if low |
+| GET | `/queue` | Fetch items from the tier queue (`?user_id=&course_ids=id1,id2&limit=10&question_only=true`) |
 | DELETE | `/queue/:id` | Consume one queue item; records content view server-side for content items |
 | GET | `/content/:id` | Fetch a single content item by UUID |
 | GET/POST | `/content` | Fetch / upload learning material |
@@ -167,23 +168,33 @@ Seven tables in PostgreSQL with pgvector HNSW indexes (cosine similarity) on all
 | `content_view` | `content_id`, `user_id`, `last_shown` (epoch ms), `view_count`; unique per (content, user) |
 | `question` | `syllabus_id`, `difficulty` (0–4), `question_type`, `options` JSONB, `answer` JSONB, `tags[]` |
 | `response` | `question_id`, `user_id`, `user_answer` JSONB, `correctness` (0–4), `responded_at` (epoch ms), `graded_at` (epoch ms, NULL until cron grades it) |
-| `study_queue` | `user_id`, `course_id`, `subtopic_id`, `item_type` (content/question), `item_id`, `item_data` JSONB (snapshot), `priority` INT, `is_review` BOOL; unique on `(user_id, item_type, item_id)` |
+| `study_queue` | `user_id`, `course_id`, `subtopic_id`, `item_type` (content/question), `item_id`, `priority` INT; unique on `(user_id, item_type, item_id)` |
 
 Timestamps are 13-digit epoch milliseconds (BIGINT). Syllabus IDs use slug hierarchy: `spanish-b2` (course) → `spanish-b2.1` (topic) → `spanish-b2.1.1` (subtopic). Other IDs are UUIDs.
 
 `graded_at` is set by the cron or the `grade-ai` endpoint, on `freeText` responses. It is NULL on insert and used to detect ungraded responses (as opposed to responses correctly scored 0). The cron acts as a fallback for any responses not graded in real-time.
 
-`study_queue` stores a **slim** denormalized snapshot in `item_data` — metadata only, no large fields. Content items include `type`, `id`, `syllabus_id`, `content_type`, `title`, `tags`. Question items include `type`, `id`, `syllabus_id`, `difficulty`, `question_type`, `tags`. Full body/question_text/options/answer are fetched on-demand via `GET /content/:id` or `GET /questions/:id`. Rows are inserted by the scheduler with `ON CONFLICT DO NOTHING` (idempotent). Priority is a bit-packed integer: `phase_weight (2^27) + type_weight (2^23) + difficulty_weight (2^20) + review_weight (2^16) + sr_score − STRUGGLE_BOOST (2^30 when struggling)`. After round-robin interleave across courses, priorities are re-numbered 0, 1, 2, … to preserve order.
+`study_queue` is a **persistent tier-based queue** — all items for a user's enrolled courses live here permanently (never deleted except on unenroll). Priority is a plain integer encoding five tiers: -1=locked, 0–99=tier0 (mastered), 100–199=tier1, 200–299=tier2, 300–399=tier3 (new/just-unlocked), 400–499=tier4 (failed/needs work). Items are fetched with `ORDER BY priority DESC` — higher priority = shown sooner. On enroll, all items are inserted at -1 (locked); the first subtopic's items are promoted to tier 3 immediately. Subsequent subtopics are unlocked by the pipeline after the previous one is completed. Full item bodies (body/question_text/options/answer) are fetched in bulk by `GET /queue` via JOIN — no secondary per-item fetch needed.
 
 ### Course Data (`courseData/`)
 
 Markdown files (primary format) that serve as the source for database ingestion. See `docs/` for format specs.
 
+Two supported layouts:
+
 ```
-courseData/{course-id}/
-  syllabus.md                # course hierarchy: course → topics → subtopics
-  {subtopic-id}.md           # content + questions for one subtopic
+courseData/{course-id}/              # direct (standalone course)
+  syllabus.md
+  {subtopic-id}.md
+
+courseData/{group}/{course-id}/      # grouped (courses belonging to a program)
+  syllabus.md
+  {subtopic-id}.md
 ```
+
+A directory is recognised as a **course** if it contains `syllabus.md` or `syllabus.json`. A directory without a syllabus file is treated as a **group** and its subdirectories are scanned for courses (one level only).
+
+The syllabus `id:` field always uses the leaf course slug (e.g. `japanese-n5`), not the group prefix.
 
 Legacy JSON format is still supported (see `docs/` for schema). The ingest script prefers `.md` when both exist.
 
@@ -192,8 +203,10 @@ Current courses: `aws-security-specialty`, `japanese-phonetics`, `mandarin-hanzi
 Check generation progress:
 
 ```bash
-node scripts/course-status.js                    # all courses
+node scripts/course-status.js                    # all courses (both layouts)
 node scripts/course-status.js aws-security-specialty
+node scripts/course-status.js japanese           # all courses in a group
+node scripts/course-status.js japanese/japanese-n5
 ```
 
 ### Learning Phases
@@ -213,7 +226,8 @@ Every subtopic must have records in all three phases.
 ### What is built
 
 **Course authoring** — fully working end-to-end:
-- Claude Code skills (`/generate-course`, `/generate-language-course`, `/generate-program`) generate `courseData/` markdown files and `programs/` documents
+- Claude Code skills (`/generate-course`, `/generate-language-course`, `/generate-program`) generate `courseData/` markdown files
+- Both direct (`courseData/{course-id}/`) and grouped (`courseData/{group}/{course-id}/`) layouts supported
 - Database schema models all entities including adaptive content (`base_content: false`), performance tracking, and content unlocking (`active` flag)
 
 **API server (data layer)** — fully implemented:
@@ -225,17 +239,20 @@ Every subtopic must have records in all three phases.
 **Ingest script** (`scripts/ingest.js`) — loads `courseData/` into the API server:
 - Supports both markdown (`.md`) and legacy JSON course formats; prefers `.md`
 - Uploads syllabus, then content and questions per subtopic
-- Supports single course, multiple courses, or all courses
+- Discovers both direct and grouped course layouts automatically
+- CLI refs: `course-id`, `group/course-id`, or `group` (all courses in group)
 - `--dry-run` flag for preview; `--base-url` for non-local servers
-- `--convert-only` parses markdown and writes JSON to `courseData/{id}/converted/` for debugging
+- `--convert-only` parses markdown and writes JSON to `courseData/{ref}/converted/` for debugging
 
 **App layer (CLI)** — working client (`app/index.js`):
 - Main menu: Study / Manage courses / Settings / Quit
 - Enroll in courses, read content, answer questions, submit responses
 - Handles `singleChoice`, `multiChoice`, `freeText`, `ordering`, `exactMatch` question types
+- Session start: multi-select course picker (defaults to `last_selected_courses`; excludes `disabled_courses`); selection saved back to settings
+- Session composition via `composeSession(items, sessionSize, reviewPct)`: splits tier-queue items into "new" (tier 3) and "review" (tiers 4/2/1/0), applies `review_pct`, gap-fills if one bucket is short, sorts by priority DESC
 - Full item body included in `GET /queue` response — no secondary fetch per item
 - Shows breadcrumb (`Course › Topic › Subtopic`) above each item; shows `explanation` after answers where present
-- `freeText` responses graded in real-time via `POST /responses/:id/grade-ai` — grade shown immediately after answering
+- `freeText` responses graded in real-time via `POST /responses/:id/grade-ai` — grade shown immediately after answering; grading failure treated as fail (correctness=0, item moves to tier 4)
 - End of session: checks `GET /struggling` and prompts user to generate adaptive practice content; fires `POST /generate-adaptive` as background task if confirmed — new items appear in next session
 - User ID persisted locally in `app/.user_id`; settings persisted in `app/.settings.json`
 
@@ -262,30 +279,31 @@ App settings (stored in `app/.settings.json`):
 
 | Setting | Default | Behaviour |
 |---------|---------|-----------|
-| `interleave_courses` | `true` | Mix subtopics from all enrolled courses in one session. When `false`, the user picks one course at session start. |
-| `interleave_subtopics` | `true` | Study all active subtopics in one session. When `false`, only the first active subtopic per course is studied. |
-| `disabled_courses` | `[]` | Course IDs temporarily paused. Paused courses are excluded from study sessions but remain enrolled. Toggle via Manage courses menu. |
+| `session_size` | `10` | Number of items per study session |
+| `review_pct` | `30` | % of session drawn from review tiers (4/2/1/0); remainder from tier 3 (new material) |
+| `last_selected_courses` | `[]` | Pre-selected courses in the course picker for the next session |
+| `disabled_courses` | `[]` | Course IDs temporarily paused. Excluded from the course picker but remain enrolled. |
 
-**Cron / adaptive engine** (`services/cron.js` + `services/scheduler.js`) — runs inside the API server process:
+**Cron / adaptive engine** (`services/cron.js` + `services/pipeline.js`) — runs inside the API server process:
 - `freeText` grading via `gradeFreeText` (`services/grading.js`); `ordering` graded deterministically. Cron acts as fallback for any responses not graded in real-time by the CLI.
-- Subtopic completion: all content viewed + avg correctness ≥ threshold (default 2.5/4)
-- Linear subtopic unlock: completes subtopic N → activates N+1 by sort order
+- Subtopic completion (`pipeline.isSubtopicComplete`): all content viewed + avg correctness ≥ threshold (default 2.5/4)
+- Linear subtopic unlock (`pipeline.unlockNextForCourse`): completes subtopic N → promotes N+1's items to tier 3
+- Regression detection: completed subtopics reactivated if last 5 graded responses avg < `REGRESSION_THRESHOLD`; items pushed back to tier 3
 - Concurrency guard: skips tick if previous run is still in progress
 - Unlock is idempotent and retried every tick (recovers from partial failures)
-- Queue refill via `scheduler.refillIfNeeded` on every tick and on every `GET /queue` call
 
-**Scheduler / study queue** (`services/scheduler.js` + `models/queueModel.js`):
-- Spaced repetition: content intervals `[1, 3, 7, 14, 30, 60]` days by view count; question intervals by avg correctness bands
-- Struggling detection: avg correctness < 1.5 after ≥3 responses → STRUGGLE_BOOST applied, queue cleared and rebuilt for that subtopic
-- Regression detection: completed subtopics reactivated if last 5 graded responses avg < 1.5
-- Round-robin course interleaving: each course sorted by priority, then merged alternating
+**Study queue** (`models/queueModel.js`):
+- Persistent tier-based queue; all enrolled items live in `study_queue` permanently (deleted only on unenroll)
+- Tier transitions: fail (correctness<3) → tier 4; tier-4 success → tier 2; tier-0 success → stays tier 0; other success → down one tier
+- Enroll: all items inserted at -1 (locked); first subtopic promoted to tier 3 (top 5 items biased toward 374–399)
+- Gated questions (have `content_ids`) stay at -1 until their required content items are viewed; promoted by `promoteGatedQuestions` after `DELETE /queue/:id` on a content item
+- Struggling detection: avg correctness < `STRUGGLING_THRESHOLD` after ≥`MIN_RESPONSES_STRUGGLE` responses → items pushed back to tier 4 for that subtopic
+- Content view tracking server-side: `DELETE /queue/:id` upserts `content_view` + calls `promoteGatedQuestions`
 - Idempotent inserts: `ON CONFLICT (user_id, item_type, item_id) DO NOTHING`
-- Content view tracking consolidated server-side: `DELETE /queue/:id` upserts `content_view`
 
 ### What is not built
 
 - **Cloud AI dispatch** — `services/ai.js` has a TODO stub; only local `claude` subprocess works
-- **Tests** — Jest is installed; `server/__tests__/` is empty
 
 ---
 
@@ -325,16 +343,14 @@ Each layer is independently deployable. The cron runs inside the API server proc
 
 **API server** — ✅ done. CRUD + vector search + AI grading/generation endpoints. Embedding generation (`services/embedding.js`) runs at upload time. `services/grading.js` owns all grading logic (deterministic + AI). `services/adaptiveGenerator.js` handles background content generation.
 
-**App layer** — ✅ CLI done (`app/index.js`). `GET /queue` returns full item bodies — no secondary fetch per item. Shows breadcrumb and explanation. Grades freeText in real-time. Prompts user to generate adaptive content when struggling detected. `app/watch.js` is an optional companion watcher that polls for new grades and prints them in a second terminal.
+**App layer** — ✅ CLI done (`app/index.js`). Multi-select course picker at session start. `GET /queue?course_ids=...` returns full item bodies. `composeSession` applies `review_pct` to split tier-queue items. Shows breadcrumb and explanation. Grades freeText in real-time (grading failure = fail). Prompts user to generate adaptive content when struggling detected. `app/watch.js` is an optional companion watcher that polls for new grades and prints them in a second terminal.
 
-**Cron + Scheduler** — ✅ fully implemented. Runs on a configurable interval per user:
+**Cron + Queue** — ✅ fully implemented. Cron runs on a configurable interval per user:
 1. Grade any ungraded `freeText` responses (fallback for responses missed by real-time grading); grade `ordering` deterministically
 2. Check subtopic completion (all content viewed + avg correctness ≥ threshold)
-3. Refill `study_queue` via scheduler if below watermark
-4. Unlock next subtopic in linear sort order; retried every tick for recovery
-5. Scheduler handles SR intervals, struggling boost, regression reactivation, round-robin interleave
-6. Graduated-course maintenance: when all subtopics in a course are completed, the scheduler injects semi-random questions from that course (`MAINTENANCE_QUESTIONS_PER_COURSE` per refill) so retention is tested. If accuracy degrades, `reactivateRegressions` fires and the course re-enters the normal active queue automatically.
-7. 🔲 Cloud AI dispatch not yet implemented (local subprocess only)
+3. Unlock next subtopic in linear sort order (promotes items from -1 to tier 3); retried every tick for recovery
+4. Detect regression on completed subtopics; push items back to tier 3
+5. 🔲 Cloud AI dispatch not yet implemented (local subprocess only)
 
 ---
 
@@ -355,13 +371,14 @@ Each axis is independent:
 
 Located in `.claude/commands/`:
 
-- **`/generate-course`** — Generate a structured course (syllabus → content → questions). Supports new courses, resume, regenerate specific topics, and revise syllabus. Subject scope limit: ~10 topics, ~60 subtopics, ~1000 content/question records.
+- **`/generate-course`** — Generate a structured course (syllabus → content → questions). Supports new courses, resume, regenerate specific topics, and revise syllabus. Subject scope limit: ~10 topics, ~60 subtopics, ~1000 content/question records. Course ref may be `course-id` or `group/course-id`.
 - **`/generate-language-course`** — Language-learning specialization of `/generate-course`.
-- **`/generate-program`** — Generate a multi-course learning program document (`programs/{id}.md`). Produces an ordered plan of stages (courses, projects, reviews) for a learning goal; does not generate course content itself.
+- **`/generate-program`** — Plan a multi-course learning program. Writes `courseData/{program-id}/program.md` — the program-id becomes the group folder. Produces an ordered sequence of courses for a learning goal; does not generate course content itself. Use the output as input for `/generate-course {program-id}/{course-id}`.
 
 Resume syntax examples:
 ```
 /generate-course spanish-a2 resume
 /generate-course spanish-a2 from topic 3 content
 /generate-course spanish-a2 regenerate topic 2
+/generate-course japanese/japanese-n5 resume
 ```

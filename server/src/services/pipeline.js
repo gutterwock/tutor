@@ -9,6 +9,7 @@
  */
 
 const pool = require("../config/db");
+const queueModel = require("../models/queueModel");
 
 const COMPLETION_THRESHOLD   = parseFloat(process.env.COMPLETION_THRESHOLD   || "2.5");
 const STRUGGLING_THRESHOLD   = parseFloat(process.env.STRUGGLING_THRESHOLD   || "1.5");
@@ -106,6 +107,10 @@ async function unlockNextForCourse(userId, courseId) {
 		 WHERE user_id = $1 AND subtopic_id = $2`,
 		[userId, next.subtopic_id]
 	);
+
+	// Promote unlocked items from -1 to tier 3 in the queue
+	await queueModel.promoteSubtopicItems(userId, next.subtopic_id);
+
 	return next.subtopic_id;
 }
 

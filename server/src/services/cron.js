@@ -5,6 +5,7 @@
  *   1. Grade any ungraded freeText / ordering responses.
  *   2. Check whether active subtopics are now complete.
  *   3. Unlock the next subtopic for any course that had a completion.
+ *   4. Reactivate regressed subtopics (completed subtopics with declining scores).
  *
  * Environment variables:
  *   CRON_INTERVAL_MS     Polling interval in ms          (default: 60000)
@@ -12,11 +13,13 @@
  */
 
 const pool = require("../config/db");
-const scheduler = require("./scheduler");
+const queueModel = require("../models/queueModel");
 const { gradeOrdering, gradeFreeText } = require("./grading");
 const { isSubtopicComplete, unlockNextForCourse } = require("./pipeline");
 
-const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_MS || "60000", 10);
+const CRON_INTERVAL_MS        = parseInt(process.env.CRON_INTERVAL_MS        || "60000", 10);
+const REGRESSION_THRESHOLD    = parseFloat(process.env.REGRESSION_THRESHOLD  || "1.5");
+const MIN_RESPONSES_REGRESS   = parseInt(process.env.MIN_RESPONSES_REGRESS   || "5",     10);
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -30,13 +33,9 @@ async function getActiveUserIds() {
 	return res.rows.map((r) => r.user_id);
 }
 
-/**
- * Responses that need grading: freeText (AI) or ordering (deterministic) where graded_at IS NULL.
- * singleChoice / multiChoice / exactMatch are graded immediately on submission and never appear here.
- */
 async function getUngradedResponses(userId) {
 	const res = await pool.query(
-		`SELECT r.id, r.user_answer,
+		`SELECT r.id, r.question_id, r.user_answer,
 		        q.question_text, q.answer, q.question_type
 		 FROM response r
 		 JOIN question q ON q.id = r.question_id
@@ -55,6 +54,30 @@ async function setCorrectness(responseId, correctness) {
 	);
 }
 
+// ── Regression detection ──────────────────────────────────────────────────────
+
+async function reactivateRegressions(userId) {
+	const res = await pool.query(
+		`SELECT subtopic_id FROM content_progress
+		 WHERE user_id = $1 AND completed = true`,
+		[userId]
+	);
+	for (const { subtopic_id } of res.rows) {
+		const { responseCount, avgCorrectness } =
+			await queueModel.getSubtopicScore(userId, subtopic_id, MIN_RESPONSES_REGRESS);
+		if (responseCount >= MIN_RESPONSES_REGRESS && avgCorrectness < REGRESSION_THRESHOLD) {
+			await pool.query(
+				`UPDATE content_progress SET completed = false, active = true
+				 WHERE user_id = $1 AND subtopic_id = $2`,
+				[userId, subtopic_id]
+			);
+			// Push items back to tier 3 so they resurface prominently
+			await queueModel.regressSubtopicItems(userId, subtopic_id);
+			console.log(`  [cron] regression — reactivated ${subtopic_id} for ${userId.slice(0, 8)}`);
+		}
+	}
+}
+
 // ── Per-user pipeline ─────────────────────────────────────────────────────────
 
 async function runForUser(userId) {
@@ -71,6 +94,8 @@ async function runForUser(userId) {
 				score = await gradeFreeText(r.question_text, r.answer, r.user_answer);
 			}
 			await setCorrectness(r.id, score);
+			// Tier transition for cron-graded responses
+			await queueModel.transitionQuestionTier(userId, r.question_id, score).catch(() => {});
 			console.log(`  [cron] graded response ${r.id}: ${score}/4 (${r.question_type})`);
 		} catch (err) {
 			console.error(`  [cron] grading failed for response ${r.id}:`, err.message);
@@ -96,14 +121,7 @@ async function runForUser(userId) {
 		}
 	}
 
-	// 3. Refill study queue (also handles regression detection)
-	await scheduler.refillIfNeeded(userId).catch((err) =>
-		console.error(`  [cron] queue refill failed for ${userId.slice(0, 8)}:`, err.message)
-	);
-
-	// 4. Unlock next subtopic for every course the user is enrolled in.
-	// Running this unconditionally (not just on new completions) ensures recovery
-	// if a previous unlock failed after the subtopic was already marked complete.
+	// 3. Unlock next subtopic for every course the user is enrolled in.
 	const coursesRes = await pool.query(
 		`SELECT DISTINCT syllabus_id FROM content_progress WHERE user_id = $1`,
 		[userId]
@@ -112,6 +130,9 @@ async function runForUser(userId) {
 		const unlocked = await unlockNextForCourse(userId, syllabus_id);
 		if (unlocked) console.log(`  [cron] unlocked ${unlocked} for user ${userId.slice(0, 8)}`);
 	}
+
+	// 4. Regression detection
+	await reactivateRegressions(userId);
 }
 
 // ── Cron runner ───────────────────────────────────────────────────────────────
@@ -142,8 +163,6 @@ async function runCron() {
 function startCron() {
 	if (_handle) return;
 	console.log(`[cron] starting (interval: ${CRON_INTERVAL_MS}ms)`);
-	// Delay first tick by 10s to allow the DB to finish initialising before the
-	// server starts querying. Subsequent ticks run on the normal interval.
 	setTimeout(() => {
 		runCron();
 		_handle = setInterval(runCron, CRON_INTERVAL_MS);

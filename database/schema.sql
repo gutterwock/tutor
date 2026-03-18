@@ -134,12 +134,19 @@ CREATE INDEX idx_question_content_ids   ON question  USING gin (content_ids);
 -- =============================================================================
 -- Study Queue
 -- =============================================================================
--- Priority-ordered work items maintained by the cron and consumed by the app.
--- item_data stores a denormalized snapshot so the app needs no secondary fetch.
--- priority: signed integer, lower = show sooner (ORDER BY priority ASC).
--- is_review: true when the item has been seen before (spaced repetition pass).
--- The unique index on (user_id, item_type, item_id) makes inserts idempotent
--- (ON CONFLICT DO NOTHING) so the cron can refill safely at any frequency.
+-- Persistent work items for every enrolled user. Items are never deleted
+-- (except on unenroll); they move between priority tiers as the user studies.
+--
+-- priority tiers (ORDER BY priority DESC — higher = shown sooner):
+--   -1          locked (not yet unlocked by cron)
+--   0 – 99      tier 0: maintenance (stays in tier 0 after consumption, re-randomised)
+--   100 – 199   tier 1
+--   200 – 299   tier 2
+--   300 – 399   tier 3: newly unlocked (starting tier)
+--   400 – 499   tier 4: failed questions (highest urgency)
+--
+-- On enroll all items are inserted at -1. The cron promotes them to tier 3
+-- as subtopics are unlocked. Exact priority within a tier is random.
 CREATE TABLE study_queue (
     id          UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     UUID    NOT NULL,
@@ -147,11 +154,8 @@ CREATE TABLE study_queue (
     subtopic_id TEXT    NOT NULL REFERENCES syllabus(id) ON DELETE CASCADE,
     item_type   TEXT    NOT NULL CHECK (item_type IN ('content', 'question')),
     item_id     UUID    NOT NULL,
-    item_data   JSONB   NOT NULL,
-    priority    INTEGER NOT NULL,
-    is_review   BOOLEAN NOT NULL DEFAULT false,
-    created_at  BIGINT  NOT NULL DEFAULT (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT
+    priority    INTEGER NOT NULL DEFAULT -1
 );
 
 CREATE UNIQUE INDEX idx_study_queue_dedup    ON study_queue (user_id, item_type, item_id);
-CREATE        INDEX idx_study_queue_priority ON study_queue (user_id, priority);
+CREATE        INDEX idx_study_queue_priority ON study_queue (user_id, priority DESC);

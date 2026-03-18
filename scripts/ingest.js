@@ -541,7 +541,7 @@ function buildQuestionRecord(block, syllabusId) {
  * Load syllabus from .md or .json and return the parsed object.
  * Returns null if no syllabus file found.
  */
-function loadSyllabus(courseDir, courseId) {
+function loadSyllabus(courseDir, displayName) {
 	const mdFile = path.join(courseDir, "syllabus.md");
 	const jsonFile = path.join(courseDir, "syllabus.json");
 
@@ -552,7 +552,7 @@ function loadSyllabus(courseDir, courseId) {
 		return { syllabus: readJson(jsonFile), format: "json" };
 	}
 
-	warn(`No syllabus.md or syllabus.json found for ${courseId} — skipping`);
+	warn(`No syllabus.md or syllabus.json found for ${displayName} — skipping`);
 	return null;
 }
 
@@ -637,19 +637,18 @@ async function uploadQuestions(records, subtopicId, contentIds = []) {
 }
 
 // ---------------------------------------------------------------------------
-// Convert-only: write parsed JSON to courseData/{id}/converted/
+// Convert-only: write parsed JSON to {courseDir}/converted/
 // ---------------------------------------------------------------------------
 
-function convertCourse(courseId) {
-	const courseDir = path.join(COURSE_DATA_DIR, courseId);
+function convertCourse(courseDir, displayName) {
 	const outDir = path.join(courseDir, "converted");
 
-	const loaded = loadSyllabus(courseDir, courseId);
+	const loaded = loadSyllabus(courseDir, displayName);
 	if (!loaded) return;
 	const { syllabus, format } = loaded;
 
 	if (format === "json") {
-		log(`  ${courseId} already uses JSON format — nothing to convert`);
+		log(`  ${displayName} already uses JSON format — nothing to convert`);
 		return;
 	}
 
@@ -687,30 +686,116 @@ function convertCourse(courseId) {
 		totalQuestions += questions.length;
 	}
 
-	log(`  done: ${courseId}  total content=${totalContent}  total questions=${totalQuestions}`);
+	log(`  done: ${displayName}  total content=${totalContent}  total questions=${totalQuestions}`);
 	log(`  output: ${outDir}`);
+}
+
+// ---------------------------------------------------------------------------
+// Course discovery helpers
+// ---------------------------------------------------------------------------
+
+/** Returns true if the given directory contains a syllabus file. */
+function isCourseDir(dirPath) {
+	return (
+		fs.existsSync(path.join(dirPath, "syllabus.md")) ||
+		fs.existsSync(path.join(dirPath, "syllabus.json"))
+	);
+}
+
+/**
+ * Discover all courses under COURSE_DATA_DIR.
+ * Supports two patterns:
+ *   - courseData/{course-id}/          (direct)
+ *   - courseData/{group}/{course-id}/  (nested, one level)
+ * Returns [{ courseDir, displayName }].
+ */
+function discoverAllCourses() {
+	const courses = [];
+	const entries = fs
+		.readdirSync(COURSE_DATA_DIR)
+		.filter(
+			(e) => !e.startsWith(".") && fs.statSync(path.join(COURSE_DATA_DIR, e)).isDirectory()
+		);
+
+	for (const entry of entries) {
+		const entryDir = path.join(COURSE_DATA_DIR, entry);
+		if (isCourseDir(entryDir)) {
+			courses.push({ courseDir: entryDir, displayName: entry });
+		} else {
+			// Treat as group dir — scan one level deep
+			const subEntries = fs
+				.readdirSync(entryDir)
+				.filter(
+					(e) =>
+						!e.startsWith(".") &&
+						fs.statSync(path.join(entryDir, e)).isDirectory()
+				);
+			for (const sub of subEntries) {
+				const subDir = path.join(entryDir, sub);
+				if (isCourseDir(subDir)) {
+					courses.push({ courseDir: subDir, displayName: `${entry}/${sub}` });
+				}
+			}
+		}
+	}
+
+	return courses;
+}
+
+/**
+ * Resolve a CLI course reference to an array of { courseDir, displayName }.
+ *   "course-id"        → direct course under courseData/
+ *   "group/course-id"  → nested course
+ *   "group"            → all courses under courseData/{group}/
+ */
+function resolveRef(ref) {
+	if (ref.includes("/")) {
+		const courseDir = path.join(COURSE_DATA_DIR, ref);
+		if (!fs.existsSync(courseDir)) {
+			warn(`Course not found: ${ref}`);
+			return [];
+		}
+		return [{ courseDir, displayName: ref }];
+	}
+
+	const directDir = path.join(COURSE_DATA_DIR, ref);
+	if (!fs.existsSync(directDir)) {
+		warn(`Course or group not found: ${ref}`);
+		return [];
+	}
+
+	if (isCourseDir(directDir)) {
+		return [{ courseDir: directDir, displayName: ref }];
+	}
+
+	// Treat as group — return all course subdirs
+	const subEntries = fs
+		.readdirSync(directDir)
+		.filter(
+			(e) =>
+				!e.startsWith(".") && fs.statSync(path.join(directDir, e)).isDirectory()
+		);
+	const courses = subEntries
+		.map((sub) => ({ courseDir: path.join(directDir, sub), displayName: `${ref}/${sub}` }))
+		.filter((c) => isCourseDir(c.courseDir));
+
+	if (courses.length === 0) warn(`No courses found in group: ${ref}`);
+	return courses;
 }
 
 // ---------------------------------------------------------------------------
 // Per-course ingest
 // ---------------------------------------------------------------------------
 
-async function ingestCourse(courseId) {
-	const courseDir = path.join(COURSE_DATA_DIR, courseId);
+async function ingestCourse(courseDir, displayName) {
+	log(`\nIngesting: ${displayName}`);
 
-	if (!fs.existsSync(courseDir)) {
-		warn(`Course directory not found: ${courseDir}`);
-		return;
-	}
-
-	log(`\nIngesting: ${courseId}`);
-
-	const loaded = loadSyllabus(courseDir, courseId);
+	const loaded = loadSyllabus(courseDir, displayName);
 	if (!loaded) return;
 	const { syllabus, format } = loaded;
 
 	log(`  format: ${format}`);
-	await uploadSyllabus(syllabus, courseId);
+	await uploadSyllabus(syllabus, displayName);
 
 	const subtopicIds = collectSubtopicIds(syllabus);
 	log(`  ${subtopicIds.length} subtopics found`);
@@ -723,7 +808,7 @@ async function ingestCourse(courseId) {
 		await uploadQuestions(subtopic.questions, subtopicId, contentIds);
 	}
 
-	log(`  done: ${courseId}`);
+	log(`  done: ${displayName}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -731,40 +816,38 @@ async function ingestCourse(courseId) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-	let courseIds = courseArgs;
+	let courses;
 
-	if (courseIds.length === 0) {
-		courseIds = fs
-			.readdirSync(COURSE_DATA_DIR)
-			.filter(
-				(entry) =>
-					!entry.startsWith(".") &&
-					fs.statSync(path.join(COURSE_DATA_DIR, entry)).isDirectory()
-			);
+	if (courseArgs.length === 0) {
+		courses = discoverAllCourses();
+	} else {
+		courses = courseArgs.flatMap((ref) => resolveRef(ref));
 	}
 
-	if (courseIds.length === 0) {
+	if (courses.length === 0) {
 		log("No courses found in courseData/");
 		process.exit(1);
 	}
 
+	const names = courses.map((c) => c.displayName).join(", ");
+
 	if (convertOnly) {
-		log(`Courses:    ${courseIds.join(", ")}`);
+		log(`Courses:    ${names}`);
 		log("Mode:       convert-only\n");
-		for (const courseId of courseIds) {
-			log(`\nConverting: ${courseId}`);
-			convertCourse(courseId);
+		for (const { courseDir, displayName } of courses) {
+			log(`\nConverting: ${displayName}`);
+			convertCourse(courseDir, displayName);
 		}
 		log("\nConvert complete.");
 		return;
 	}
 
 	log(`API server: ${baseUrl}`);
-	log(`Courses:    ${courseIds.join(", ")}`);
+	log(`Courses:    ${names}`);
 	if (dryRun) log("Mode:       dry-run");
 
-	for (const courseId of courseIds) {
-		await ingestCourse(courseId);
+	for (const { courseDir, displayName } of courses) {
+		await ingestCourse(courseDir, displayName);
 	}
 
 	log("\nIngest complete.");

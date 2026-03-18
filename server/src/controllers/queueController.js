@@ -1,12 +1,16 @@
 const pool = require("../config/db");
 const queueModel = require("../models/queueModel");
 const contentModel = require("../models/contentModel");
-const scheduler = require("../services/scheduler");
 
 /**
- * GET /queue?user_id=&limit=
- * Returns the next `limit` ready items for the user.
- * Eagerly triggers a refill if the queue is low before responding.
+ * GET /queue?user_id=&course_ids=id1,id2&limit=10&question_only=true
+ *
+ * Returns up to `limit` items per tier (tiers 0–4) for the selected courses.
+ * Items at priority -1 (locked) are never returned.
+ * The client applies review_pct logic to compose the session from the tiers.
+ *
+ * Each item is enriched with the full content/question body.
+ * Questions with content_ids have their required content fetched in a separate pass.
  */
 async function getQueue(req, res) {
 	try {
@@ -14,54 +18,104 @@ async function getQueue(req, res) {
 		if (!user_id) {
 			return res.status(400).json({ error: "Missing required query param: user_id" });
 		}
-		const limit = Math.min(parseInt(req.query.limit ?? "10", 10), 100);
 
-		// Parse weights: "course-id:2,other-id:3" → { 'course-id': 2, 'other-id': 3 }
-		const weights = {};
-		if (req.query.weights) {
-			for (const pair of req.query.weights.split(",")) {
-				const colon = pair.lastIndexOf(":");
-				if (colon > 0) {
-					const id = pair.slice(0, colon).trim();
-					const w  = parseInt(pair.slice(colon + 1), 10);
-					if (id && !isNaN(w) && w >= 1) weights[id] = Math.min(w, 10);
-				}
-			}
+		// course_ids: comma-separated list of course IDs to filter by
+		const courseIds = req.query.course_ids
+			? req.query.course_ids.split(",").map((s) => s.trim()).filter(Boolean)
+			: null;
+
+		if (!courseIds || courseIds.length === 0) {
+			return res.status(400).json({ error: "Missing required query param: course_ids" });
 		}
 
-		const sessionLength = req.query.session_length ? parseInt(req.query.session_length, 10) : 0;
+		const limitPerTier = Math.min(parseInt(req.query.limit ?? "10", 10), 200);
 		const questionOnly = req.query.question_only === "true";
 
-		// Refill before responding so the caller always gets fresh items
-		await scheduler.refillIfNeeded(user_id, weights, sessionLength, questionOnly).catch((err) =>
-			console.warn("  [queue] refill error:", err.message)
-		);
+		const items = await queueModel.tieredFetch(user_id, courseIds, limitPerTier, questionOnly);
 
-		const items = await queueModel.peekQueue(user_id, limit, questionOnly ? "question" : null);
+		if (!items.length) return res.json([]);
 
-		// Bulk-enrich with full body (2 queries max regardless of queue size)
+		// ── Enrich with full bodies ───────────────────────────────────────────
 		const contentIds  = items.filter((i) => i.item_type === "content").map((i) => i.item_id);
 		const questionIds = items.filter((i) => i.item_type === "question").map((i) => i.item_id);
 
 		const [cRows, qRows] = await Promise.all([
 			contentIds.length
-				? pool.query(`SELECT id, body, links, metadata FROM content WHERE id = ANY($1)`, [contentIds])
+				? pool.query(
+					`SELECT id, syllabus_id, content_type, title, body, tags, links, metadata
+					 FROM content WHERE id = ANY($1)`,
+					[contentIds]
+				)
 				: { rows: [] },
 			questionIds.length
-				? pool.query(`SELECT id, question_text, options, answer, explanation, case_sensitive, passage FROM question WHERE id = ANY($1)`, [questionIds])
+				? pool.query(
+					`SELECT id, syllabus_id, difficulty, question_type, question_text,
+					        options, answer, explanation, case_sensitive, passage,
+					        tags, content_ids
+					 FROM question WHERE id = ANY($1)`,
+					[questionIds]
+				)
 				: { rows: [] },
 		]);
 
 		const contentMap  = Object.fromEntries(cRows.rows.map((r) => [r.id, r]));
 		const questionMap = Object.fromEntries(qRows.rows.map((r) => [r.id, r]));
 
-		const enriched = items.map((item) => ({
-			...item,
-			item_data: {
-				...item.item_data,
-				...(item.item_type === "content" ? contentMap[item.item_id] : questionMap[item.item_id]),
-			},
-		}));
+		// ── Fetch gated content bodies (separate pass) ────────────────────────
+		// Collect all content_ids referenced by questions in this batch
+		const gatedContentIds = new Set();
+		for (const q of qRows.rows) {
+			if (q.content_ids && q.content_ids.length > 0) {
+				q.content_ids.forEach((id) => gatedContentIds.add(id));
+			}
+		}
+		const gatedContentMap = {};
+		if (gatedContentIds.size > 0) {
+			const gcRows = await pool.query(
+				`SELECT id, title, body FROM content WHERE id = ANY($1)`,
+				[Array.from(gatedContentIds)]
+			);
+			for (const r of gcRows.rows) gatedContentMap[r.id] = r;
+		}
+
+		// ── Build breadcrumbs ────────────────────────────────────────────────
+		const subtopicIds = [...new Set(items.map((i) => i.subtopic_id))];
+		const bcRows = await pool.query(
+			`SELECT s.id AS subtopic_id, s.name AS subtopic_name,
+			        t.name AS topic_name, c.name AS course_name
+			 FROM syllabus s
+			 JOIN syllabus t ON t.id = s.parent_id
+			 JOIN syllabus c ON c.id = t.parent_id
+			 WHERE s.id = ANY($1)`,
+			[subtopicIds]
+		);
+		const breadcrumbMap = Object.fromEntries(
+			bcRows.rows.map((r) => [
+				r.subtopic_id,
+				`${r.course_name}  ›  ${r.topic_name}  ›  ${r.subtopic_name}`,
+			])
+		);
+
+		// ── Assemble enriched items ───────────────────────────────────────────
+		const enriched = items.map((item) => {
+			const body = item.item_type === "content"
+				? contentMap[item.item_id]
+				: questionMap[item.item_id];
+
+			const extra = {};
+			if (item.item_type === "question" && body?.content_ids?.length > 0) {
+				extra.required_content = body.content_ids.map((id) => gatedContentMap[id]).filter(Boolean);
+			}
+
+			return {
+				...item,
+				item_data: {
+					...body,
+					breadcrumb: breadcrumbMap[item.subtopic_id] ?? "",
+					...extra,
+				},
+			};
+		});
 
 		return res.json(enriched);
 	} catch (err) {
@@ -72,25 +126,34 @@ async function getQueue(req, res) {
 
 /**
  * DELETE /queue/:id
- * Removes one item from the queue and, for content items, records a content view.
- * The app calls this after successfully showing the item to the user.
+ * For content items: moves the item down one priority tier and records a content view.
+ * For question items: no-op (tier already updated by response submission).
  */
 async function deleteQueueItem(req, res) {
 	try {
 		const { id } = req.params;
-		const item = await queueModel.deleteItem(id);
-		if (!item) {
+
+		// Fetch item to check type
+		const row = await pool.query(
+			`SELECT id, user_id, item_type, item_id, subtopic_id FROM study_queue WHERE id = $1`,
+			[id]
+		);
+		if (!row.rows.length) {
 			return res.status(404).json({ error: "Queue item not found" });
 		}
+		const item = row.rows[0];
 
-		// Track content views server-side so the app needs only one call per item
 		if (item.item_type === "content") {
+			await queueModel.consumeContent(id);
 			await contentModel.upsertContentView(item.item_id, item.user_id).catch((err) =>
 				console.warn("  [queue] content view upsert failed:", err.message)
 			);
+			// Promote gated questions that are now unblocked
+			await queueModel.promoteGatedQuestions(item.user_id, item.subtopic_id).catch(() => {});
 		}
+		// question items: tier already updated by response submission path — nothing to do
 
-		return res.json({ deleted: true });
+		return res.json({ ok: true });
 	} catch (err) {
 		console.error("deleteQueueItem error:", err);
 		return res.status(500).json({ error: "Internal server error" });
@@ -99,20 +162,11 @@ async function deleteQueueItem(req, res) {
 
 /**
  * DELETE /queue?user_id=&course_id=
- * Removes all queue items for a user/course pair (called when a course is paused).
+ * No-op in the new system (queue items persist; course picker handles exclusion).
+ * Kept for backward compatibility.
  */
 async function clearCourseQueue(req, res) {
-	try {
-		const { user_id, course_id } = req.query;
-		if (!user_id || !course_id) {
-			return res.status(400).json({ error: "Missing required query params: user_id, course_id" });
-		}
-		await queueModel.clearCourseItems(user_id, course_id);
-		return res.json({ cleared: true, course_id });
-	} catch (err) {
-		console.error("clearCourseQueue error:", err);
-		return res.status(500).json({ error: "Internal server error" });
-	}
+	return res.json({ ok: true });
 }
 
 module.exports = { getQueue, deleteQueueItem, clearCourseQueue };

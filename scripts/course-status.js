@@ -38,6 +38,83 @@ function parseSyllabusSubtopics(syllabusPath) {
 }
 
 // ---------------------------------------------------------------------------
+// Course discovery helpers
+// ---------------------------------------------------------------------------
+
+function isCourseDir(dirPath) {
+  return (
+    fs.existsSync(path.join(dirPath, "syllabus.md")) ||
+    fs.existsSync(path.join(dirPath, "syllabus.json"))
+  );
+}
+
+/**
+ * Discover all courses under COURSE_DATA_DIR.
+ * Returns [{ courseDir, courseId, displayName }].
+ */
+function discoverAllCourses() {
+  const courses = [];
+  const entries = fs
+    .readdirSync(COURSE_DATA_DIR)
+    .filter((e) => !e.startsWith(".") && fs.statSync(path.join(COURSE_DATA_DIR, e)).isDirectory());
+
+  for (const entry of entries) {
+    const entryDir = path.join(COURSE_DATA_DIR, entry);
+    if (isCourseDir(entryDir)) {
+      courses.push({ courseDir: entryDir, courseId: entry, displayName: entry });
+    } else {
+      const subEntries = fs
+        .readdirSync(entryDir)
+        .filter(
+          (e) => !e.startsWith(".") && fs.statSync(path.join(entryDir, e)).isDirectory()
+        );
+      for (const sub of subEntries) {
+        const subDir = path.join(entryDir, sub);
+        if (isCourseDir(subDir)) {
+          courses.push({ courseDir: subDir, courseId: sub, displayName: `${entry}/${sub}` });
+        }
+      }
+    }
+  }
+
+  return courses;
+}
+
+/**
+ * Resolve a CLI reference to course objects.
+ *   "course-id"       → direct course
+ *   "group/course-id" → nested course
+ *   "group"           → all courses in that group
+ */
+function resolveRef(ref) {
+  if (ref.includes("/")) {
+    const [group, courseId] = ref.split("/");
+    const courseDir = path.join(COURSE_DATA_DIR, group, courseId);
+    if (!fs.existsSync(courseDir)) return [];
+    return [{ courseDir, courseId, displayName: ref }];
+  }
+
+  const directDir = path.join(COURSE_DATA_DIR, ref);
+  if (!fs.existsSync(directDir)) return [];
+
+  if (isCourseDir(directDir)) {
+    return [{ courseDir: directDir, courseId: ref, displayName: ref }];
+  }
+
+  // Group
+  const subEntries = fs
+    .readdirSync(directDir)
+    .filter((e) => !e.startsWith(".") && fs.statSync(path.join(directDir, e)).isDirectory());
+  return subEntries
+    .map((sub) => ({
+      courseDir: path.join(directDir, sub),
+      courseId: sub,
+      displayName: `${ref}/${sub}`,
+    }))
+    .filter((c) => isCourseDir(c.courseDir));
+}
+
+// ---------------------------------------------------------------------------
 // Get generated subtopic files (excludes syllabus.md and converted/)
 // ---------------------------------------------------------------------------
 
@@ -66,12 +143,11 @@ function progressBar(done, total, width = 20) {
 // Report for one course
 // ---------------------------------------------------------------------------
 
-function reportCourse(courseId) {
-  const courseDir = path.join(COURSE_DATA_DIR, courseId);
+function reportCourse(courseDir, courseId, displayName) {
   const syllabusPath = path.join(courseDir, "syllabus.md");
 
   if (!fs.existsSync(syllabusPath)) {
-    console.log(`  ${courseId}`);
+    console.log(`  ${displayName}`);
     console.log(`    ⚠️  No syllabus.md found\n`);
     return;
   }
@@ -87,7 +163,7 @@ function reportCourse(courseId) {
 
   const status = done === total && total > 0 ? "✅" : done === 0 ? "⬜" : "🔄";
 
-  console.log(`  ${status} ${courseId}`);
+  console.log(`  ${status} ${displayName}`);
   console.log(`     ${bar} ${done}/${total} subtopics (${pct}%)`);
 
   // Show missing subtopics if partially done
@@ -120,25 +196,16 @@ if (!fs.existsSync(COURSE_DATA_DIR)) {
   process.exit(1);
 }
 
-const allCourses = fs
-  .readdirSync(COURSE_DATA_DIR)
-  .filter((f) => fs.statSync(path.join(COURSE_DATA_DIR, f)).isDirectory())
-  .filter((f) => f !== "converted")
-  .sort();
-
-const courses = args.length > 0 ? args : allCourses;
+const courses = args.length > 0
+  ? args.flatMap((ref) => resolveRef(ref))
+  : discoverAllCourses().sort((a, b) => a.displayName.localeCompare(b.displayName));
 
 console.log(`\nCourse generation status — ${new Date().toLocaleDateString()}\n`);
 
 let totalDone = 0;
 let totalExpected = 0;
 
-for (const courseId of courses) {
-  const courseDir = path.join(COURSE_DATA_DIR, courseId);
-  if (!fs.existsSync(courseDir)) {
-    console.log(`  ⚠️  ${courseId} — directory not found\n`);
-    continue;
-  }
+for (const { courseDir, courseId, displayName } of courses) {
   const syllabusPath = path.join(courseDir, "syllabus.md");
   if (fs.existsSync(syllabusPath)) {
     const expected = parseSyllabusSubtopics(syllabusPath);
@@ -147,7 +214,7 @@ for (const courseId of courses) {
     totalDone += expected.filter((id) => generatedSet.has(id)).length;
     totalExpected += expected.length;
   }
-  reportCourse(courseId);
+  reportCourse(courseDir, courseId, displayName);
 }
 
 if (courses.length > 1) {

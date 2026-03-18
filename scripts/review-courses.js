@@ -210,18 +210,55 @@ function reviewFile(filePath) {
   return { errors, warnings, validator };
 }
 
-function reviewCourse(courseId) {
-  const courseDir = path.join(__dirname, '../courseData', courseId);
-  if (!fs.existsSync(courseDir)) {
-    console.error(`Course not found: ${courseId}`);
-    process.exit(1);
-  }
+const COURSE_DATA_DIR = path.join(__dirname, '../courseData');
 
-  const files = fs.readdirSync(courseDir).filter(f => f.endsWith('.md') && f !== 'syllabus.md');
+function isCourseDir(dirPath) {
+  return fs.existsSync(path.join(dirPath, 'syllabus.md')) ||
+         fs.existsSync(path.join(dirPath, 'syllabus.json'));
+}
+
+function discoverAllCourses() {
+  const courses = [];
+  const entries = fs.readdirSync(COURSE_DATA_DIR)
+    .filter(e => !e.startsWith('.') && fs.statSync(path.join(COURSE_DATA_DIR, e)).isDirectory());
+  for (const entry of entries) {
+    const entryDir = path.join(COURSE_DATA_DIR, entry);
+    if (isCourseDir(entryDir)) {
+      courses.push({ courseDir: entryDir, displayName: entry });
+    } else {
+      fs.readdirSync(entryDir)
+        .filter(e => !e.startsWith('.') && fs.statSync(path.join(entryDir, e)).isDirectory())
+        .forEach(sub => {
+          const subDir = path.join(entryDir, sub);
+          if (isCourseDir(subDir)) {
+            courses.push({ courseDir: subDir, displayName: `${entry}/${sub}` });
+          }
+        });
+    }
+  }
+  return courses;
+}
+
+function resolveRef(ref) {
+  if (ref.includes('/')) {
+    const courseDir = path.join(COURSE_DATA_DIR, ref);
+    if (!fs.existsSync(courseDir)) return null;
+    return { courseDir, displayName: ref };
+  }
+  const directDir = path.join(COURSE_DATA_DIR, ref);
+  if (!fs.existsSync(directDir)) return null;
+  if (isCourseDir(directDir)) return { courseDir: directDir, displayName: ref };
+  // group — return all courses under it
+  return null; // groups not supported for single-course review
+}
+
+function reviewCourse(courseDir, displayName) {
+  const files = fs.readdirSync(courseDir)
+    .filter(f => f.endsWith('.md') && f !== 'syllabus.md' && f !== 'program.md');
   let totalErrors = 0;
   let totalWarnings = 0;
 
-  console.log(`\n📚 Reviewing course: ${courseId}\n`);
+  console.log(`\n📚 Reviewing course: ${displayName}\n`);
 
   files.forEach(file => {
     const filePath = path.join(courseDir, file);
@@ -238,20 +275,15 @@ function reviewCourse(courseId) {
 }
 
 function reviewAllCourses() {
-  const courseDataDir = path.join(__dirname, '../courseData');
-  const courses = fs.readdirSync(courseDataDir).filter(f => {
-    const stat = fs.statSync(path.join(courseDataDir, f));
-    return stat.isDirectory() && !f.startsWith('.');
-  });
-
+  const courses = discoverAllCourses();
   let totalErrors = 0;
   let totalWarnings = 0;
 
   console.log(`\n📚 Reviewing all courses (${courses.length})\n`);
 
-  courses.forEach(course => {
-    const courseDir = path.join(courseDataDir, course);
-    const files = fs.readdirSync(courseDir).filter(f => f.endsWith('.md') && f !== 'syllabus.md');
+  courses.forEach(({ courseDir, displayName }) => {
+    const files = fs.readdirSync(courseDir)
+      .filter(f => f.endsWith('.md') && f !== 'syllabus.md' && f !== 'program.md');
 
     files.forEach(file => {
       const filePath = path.join(courseDir, file);
@@ -269,12 +301,17 @@ function reviewAllCourses() {
 }
 
 // CLI
-const courseId = process.argv[2];
+const arg = process.argv[2];
 
-if (!courseId) {
+if (!arg) {
   const success = reviewAllCourses();
   process.exit(success ? 0 : 1);
 } else {
-  const success = reviewCourse(courseId);
+  const resolved = resolveRef(arg);
+  if (!resolved) {
+    console.error(`Course not found: ${arg}`);
+    process.exit(1);
+  }
+  const success = reviewCourse(resolved.courseDir, resolved.displayName);
   process.exit(success ? 0 : 1);
 }

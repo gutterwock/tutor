@@ -10,11 +10,10 @@ const ID_FILE = path.join(__dirname, ".user_id");
 const SETTINGS_FILE = path.join(__dirname, ".settings.json");
 
 const DEFAULT_SETTINGS = {
-	interleave_courses: true,   // mix subtopics from all enrolled courses in one session
-	interleave_subtopics: true, // study all active subtopics per session (vs. one at a time)
-	disabled_courses: [],       // course IDs temporarily excluded from study sessions
-	course_weights: {},         // course ID → integer multiplier (default 1, omitted if 1)
-	session_length: null,       // null = unlimited; number = max shown items per session
+	disabled_courses: [],       // course IDs temporarily excluded from course picker
+	session_size: 10,           // items per session (min 5); also used as limit per tier in fetch
+	review_pct: 30,             // % of session drawn from review tiers (0/1/2/4); rest from tier 3 (new)
+	last_selected_courses: [],  // last course IDs chosen at session start; used as default
 };
 
 // ── persistence ───────────────────────────────────────────────────────────────
@@ -58,7 +57,6 @@ async function api(method, urlPath, body) {
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 const pause = () => ask("\nPress Enter to continue...");
-const on = (v) => (v ? "ON " : "OFF");
 const hr = () => console.log("\n" + "─".repeat(60));
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const clear = () => process.stdout.write("\x1Bc");
@@ -69,31 +67,74 @@ function progressBar(completed, total, width = 20) {
 	return "▓".repeat(filled) + "░".repeat(width - filled);
 }
 
+// ── session composition ───────────────────────────────────────────────────────
+
+/**
+ * Given the flat tiered fetch result, compose a session of `sessionSize` items.
+ * reviewPct (0–100) controls what fraction comes from review tiers (0/1/2/4).
+ * Tier 3 = new items. If one bucket is short, the other fills the remainder.
+ * Final list is sorted by priority DESC (tier 4 first, then highest within tier).
+ */
+function composeSession(items, sessionSize, reviewPct) {
+	const newItems    = items.filter((i) => i.priority >= 300 && i.priority <= 399);
+	const reviewItems = items.filter((i) => i.priority < 300 || i.priority >= 400)
+		.sort((a, b) => b.priority - a.priority);
+
+	const targetNew    = Math.max(0, Math.floor(sessionSize * (1 - reviewPct / 100)));
+	const targetReview = sessionSize - targetNew;
+
+	const chosen = [];
+
+	const fromNew    = newItems.slice(0, targetNew);
+	const fromReview = reviewItems.slice(0, targetReview);
+
+	chosen.push(...fromNew, ...fromReview);
+
+	// Fill gaps
+	if (fromNew.length < targetNew) {
+		const gap = targetNew - fromNew.length;
+		const extra = reviewItems.slice(targetReview, targetReview + gap);
+		chosen.push(...extra);
+	} else if (fromReview.length < targetReview) {
+		const gap = targetReview - fromReview.length;
+		const extra = newItems.slice(targetNew, targetNew + gap);
+		chosen.push(...extra);
+	}
+
+	// Sort: priority DESC so tier 4 (urgent) comes first
+	return chosen.sort((a, b) => b.priority - a.priority);
+}
+
 // ── settings menu ─────────────────────────────────────────────────────────────
 
 async function settingsMenu(settings) {
 	while (true) {
 		clear();
 		console.log("Settings\n");
-		console.log(`  1.  Interleave courses    [${on(settings.interleave_courses)}]  — mix subtopics from all courses in one session`);
-		console.log(`  2.  Interleave subtopics  [${on(settings.interleave_subtopics)}]  — study all active subtopics per session vs. one at a time`);
-		const sl = settings.session_length;
-		console.log(`  3.  Session length        [${sl ? sl + " items" : "unlimited"}]  — items shown per session (0 to clear)`);
+		console.log(`  1.  Session size   [${settings.session_size} items]  — items shown per session (min 5)`);
+		console.log(`  2.  Review %       [${settings.review_pct}%]  — portion of session from review tiers (0=all new, 100=all review)`);
 		console.log("\n  b.  Back");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
 		if (input === "1") {
-			settings.interleave_courses = !settings.interleave_courses;
-			saveSettings(settings);
-		} else if (input === "2") {
-			settings.interleave_subtopics = !settings.interleave_subtopics;
-			saveSettings(settings);
-		} else if (input === "3") {
-			const raw = (await ask("  Session length (number of items, or 0 for unlimited): ")).trim();
+			const raw = (await ask("  Session size (min 5): ")).trim();
 			const n = parseInt(raw, 10);
-			if (!isNaN(n) && n >= 0) {
-				settings.session_length = n === 0 ? null : n;
+			if (!isNaN(n) && n >= 5) {
+				settings.session_size = n;
 				saveSettings(settings);
+			} else {
+				console.log("  Invalid — minimum 5.");
+				await pause();
+			}
+		} else if (input === "2") {
+			const raw = (await ask("  Review % (0–100): ")).trim();
+			const n = parseInt(raw, 10);
+			if (!isNaN(n) && n >= 0 && n <= 100) {
+				settings.review_pct = n;
+				saveSettings(settings);
+			} else {
+				console.log("  Invalid — enter 0–100.");
+				await pause();
 			}
 		} else if (input === "b" || input === "") {
 			return;
@@ -149,9 +190,7 @@ async function showCourseProgress(userId, course, settings) {
 		}
 
 		const paused = settings.disabled_courses.includes(course.id);
-		const weight = settings.course_weights[course.id] ?? 1;
 		console.log(`\n  p.  ${paused ? "Resume" : "Pause"} this course`);
-		console.log(`  w.  Set weight  (currently ${weight}×)`);
 		console.log("  u.  Unenroll from this course");
 		console.log("  b.  Back");
 
@@ -164,25 +203,9 @@ async function showCourseProgress(userId, course, settings) {
 				console.log(`\n  "${course.name}" resumed.`);
 			} else {
 				settings.disabled_courses.push(course.id);
-				await api("DELETE", `/queue?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`).catch(() => {});
 				console.log(`\n  "${course.name}" paused.`);
 			}
 			saveSettings(settings);
-			await pause();
-		} else if (input === "w") {
-			const raw = (await ask("  Weight (1–5, default 1): ")).trim();
-			const w = parseInt(raw, 10);
-			if (!isNaN(w) && w >= 1 && w <= 5) {
-				if (w === 1) {
-					delete settings.course_weights[course.id];
-				} else {
-					settings.course_weights[course.id] = w;
-				}
-				saveSettings(settings);
-				console.log(`\n  Weight set to ${w}×.`);
-			} else {
-				console.log("\n  Invalid — enter a number between 1 and 5.");
-			}
 			await pause();
 		} else if (input === "u") {
 			const confirm = (await ask(`\n  Unenroll from "${course.name}"? This cannot be undone. (y/N) `)).trim().toLowerCase();
@@ -190,7 +213,9 @@ async function showCourseProgress(userId, course, settings) {
 				await api("DELETE", "/syllabus/enroll", { user_id: userId, course_id: course.id });
 				const di = settings.disabled_courses.indexOf(course.id);
 				if (di >= 0) settings.disabled_courses.splice(di, 1);
-				delete settings.course_weights[course.id];
+				// Remove from last_selected_courses if present
+				settings.last_selected_courses = (settings.last_selected_courses || [])
+					.filter((id) => id !== course.id);
 				saveSettings(settings);
 				console.log(`\n  Unenrolled from "${course.name}".`);
 				await pause();
@@ -247,6 +272,65 @@ async function manageCoursesMenu(userId, settings) {
 	}
 }
 
+// ── course picker ─────────────────────────────────────────────────────────────
+
+/**
+ * Prompt the user to select which courses to study.
+ * Defaults to last_selected_courses. Returns an array of course IDs.
+ */
+async function pickCourses(userId, settings) {
+	const enrolled = await api("GET", `/enrollments?user_id=${userId}`);
+	const available = enrolled.filter((c) => !settings.disabled_courses.includes(c.id));
+
+	if (available.length === 0) {
+		console.log("\nNo active courses. Use Manage courses to enroll or resume a paused course.\n");
+		return null;
+	}
+
+	if (available.length === 1) {
+		// Only one option — skip the picker
+		return [available[0].id];
+	}
+
+	// Determine defaults
+	const last = (settings.last_selected_courses || []).filter((id) =>
+		available.some((c) => c.id === id)
+	);
+	const defaultSet = last.length > 0 ? last : available.map((c) => c.id);
+
+	console.log("\nSelect courses for this session (space-separated numbers, Enter for default):\n");
+	available.forEach((c, i) => {
+		const isDefault = defaultSet.includes(c.id) ? "*" : " ";
+		console.log(`  ${isDefault} ${i + 1}.  ${c.name}`);
+	});
+	console.log("\n  (* = default selection)");
+
+	const input = (await ask("\n> ")).trim();
+	let selected;
+
+	if (!input) {
+		selected = available.filter((c) => defaultSet.includes(c.id));
+	} else {
+		const indices = input.split(/\s+/).map((s) => parseInt(s, 10) - 1);
+		const invalid = indices.filter((i) => isNaN(i) || i < 0 || i >= available.length);
+		if (invalid.length) {
+			console.log("Invalid selection.");
+			return null;
+		}
+		selected = indices.map((i) => available[i]);
+	}
+
+	if (selected.length === 0) {
+		console.log("No courses selected.");
+		return null;
+	}
+
+	const ids = selected.map((c) => c.id);
+	settings.last_selected_courses = ids;
+	saveSettings(settings);
+	return ids;
+}
+
 // ── study session ─────────────────────────────────────────────────────────────
 
 function formatOptions(options) {
@@ -268,7 +352,6 @@ async function showContent(data) {
 
 /**
  * Ask a question and return { correctness, userAnswer }.
- * Grading logic is identical to the previous quizSubtopic function.
  */
 async function askQuestion(data) {
 	if (data.passage) {
@@ -380,99 +463,59 @@ async function askQuestion(data) {
 }
 
 async function studySession(userId, settings, questionOnly = false) {
-	// Determine which courses to include
-	const enrolled = await api("GET", `/enrollments?user_id=${userId}`);
-	const enabledCourses = enrolled.filter((c) => !settings.disabled_courses.includes(c.id));
+	// Course picker
+	const courseIds = await pickCourses(userId, settings);
+	if (!courseIds) return;
 
-	if (!enabledCourses.length) {
-		console.log("\nNo active courses. Use Manage courses to enroll or resume a paused course.\n");
+	const sessionSize = Math.max(5, settings.session_size ?? 10);
+	const reviewPct   = Math.max(0, Math.min(100, settings.review_pct ?? 30));
+
+	const courseIdsParam = courseIds.map(encodeURIComponent).join(",");
+	const questionOnlyQuery = questionOnly ? "&question_only=true" : "";
+
+	const rawItems = await api(
+		"GET",
+		`/queue?user_id=${userId}&course_ids=${courseIdsParam}&limit=${sessionSize}${questionOnlyQuery}`
+	).catch((err) => {
+		console.error("Failed to fetch queue:", err.message);
+		return [];
+	});
+
+	if (!rawItems.length) {
+		console.log("\nNothing in your queue for the selected courses.\n");
 		await pause();
 		return;
 	}
 
-	let activeCourseIds = enabledCourses.map((c) => c.id);
-
-	// If not interleaving courses, let user pick one
-	if (!settings.interleave_courses && activeCourseIds.length > 1) {
-		console.log("\nWhich course?\n");
-		enabledCourses
-			.filter((c) => activeCourseIds.includes(c.id))
-			.forEach((c, i) => console.log(`  ${i + 1}.  ${c.name}`));
-		const input = await ask("\n> ");
-		const idx = parseInt(input, 10) - 1;
-		if (isNaN(idx) || idx < 0 || idx >= activeCourseIds.length) {
-			console.log("Invalid selection.");
-			await pause();
-			return;
-		}
-		activeCourseIds = [activeCourseIds[idx]];
-	}
-
-	// Fetch queue (server refills if low)
-	const weightParam = Object.entries(settings.course_weights ?? {})
-		.map(([id, w]) => `${id}:${w}`)
-		.join(",");
-	const weightsQuery = weightParam ? `&weights=${encodeURIComponent(weightParam)}` : "";
-	const sessionLimit = settings.session_length ?? null;
-	// Over-fetch slightly to account for empty-body content items that are consumed silently
-	const fetchLimit = sessionLimit ? Math.min(sessionLimit + 20, 100) : 50;
-	const sessionLengthQuery = sessionLimit ? `&session_length=${sessionLimit}` : "";
-	const questionOnlyQuery = questionOnly ? "&question_only=true" : "";
-	let items = await api("GET", `/queue?user_id=${userId}&limit=${fetchLimit}${weightsQuery}${sessionLengthQuery}${questionOnlyQuery}`);
-
-	// Filter to enabled courses
-	items = items.filter((item) => activeCourseIds.includes(item.course_id));
-
-	// If not interleaving subtopics, keep only the first subtopic per course
-	if (!settings.interleave_subtopics) {
-		const firstSub = {};
-		items = items.filter((item) => {
-			if (firstSub[item.course_id]) return item.subtopic_id === firstSub[item.course_id];
-			firstSub[item.course_id] = item.subtopic_id;
-			return true;
-		});
-	}
+	const items = composeSession(rawItems, sessionSize, reviewPct);
 
 	if (!items.length) {
-		console.log("\nYour queue is empty — nothing due right now. Check back later or enroll in more courses.\n");
+		console.log("\nYour queue is empty — nothing due right now.\n");
 		await pause();
 		return;
 	}
 
-	// Label: show "review" tag if any items are reviews
-	const hasReview = items.some((i) => i.is_review);
-	if (sessionLimit) {
-		console.log(`\nSession: up to ${sessionLimit} item${sessionLimit > 1 ? "s" : ""}${hasReview ? " (includes review)" : ""}`);
-	} else {
-		console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
-	}
+	const hasReview = items.some((i) => i.priority < 300 || i.priority >= 400);
+	console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
 	await pause();
 
 	let correct = 0;
 	let total = 0;
-	let shownCount = 0;
 
 	for (const item of items) {
-		if (sessionLimit && shownCount >= sessionLimit) break;
-
 		clear();
-		if (item.item_data.breadcrumb) console.log(`\n  ${item.item_data.breadcrumb}\n`);
+		if (item.item_data?.breadcrumb) console.log(`\n  ${item.item_data.breadcrumb}\n`);
 		const data = item.item_data;
 
 		if (item.item_type === "content") {
 			if (data.body && data.body.trim()) {
 				await showContent(data);
-				shownCount++;
 			}
-			// DELETE triggers content_view upsert server-side (even for empty-body parent records)
 			await api("DELETE", `/queue/${item.id}`).catch(() => {});
 
 		} else {
-			shownCount++;
 			hr();
 			let { correctness, userAnswer } = await askQuestion(data);
-			// Submit response before dequeuing so a crash between the two leaves the item in queue
-			// Omit correctness for freeText so server stores it as ungraded (needs_grading: true)
 			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
 			if (data.question_type !== "freeText") submitBody.correctness = correctness;
 			const submitted = await api("POST", "/responses", submitBody);
@@ -489,7 +532,9 @@ async function studySession(userId, settings, questionOnly = false) {
 					if (data.explanation) console.log(`\n  ${data.explanation}`);
 					correctness = graded.correctness;
 				} else {
-					console.log("  (Grading failed — will be retried by server.)");
+					console.log("  (Grading failed — marked as incorrect.)");
+					correctness = 0;
+					await api("PATCH", `/responses/${submitted.id}/grade`, { user_id: userId, correctness: 0 }).catch(() => {});
 				}
 				await pause();
 			} else {
