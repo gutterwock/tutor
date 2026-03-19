@@ -61,41 +61,6 @@ async function getContent(req, res) {
 }
 
 /**
- * GET /content-views?user_id=&syllabus_id=
- */
-async function getContentViews(req, res) {
-	try {
-		const { user_id, syllabus_id } = req.query;
-		if (!user_id) {
-			return res.status(400).json({ error: "Missing required query param: user_id" });
-		}
-		const rows = await contentModel.getContentViews(user_id, syllabus_id ?? null);
-		return res.json(rows);
-	} catch (err) {
-		console.error("getContentViews error:", err);
-		return res.status(500).json({ error: "Internal server error" });
-	}
-}
-
-/**
- * PUT /content-views
- * Body: { content_id, user_id }
- */
-async function updateContentView(req, res) {
-	try {
-		const { content_id, user_id } = req.body;
-		if (!content_id || !user_id) {
-			return res.status(400).json({ error: "Missing required fields: content_id, user_id" });
-		}
-		const row = await contentModel.upsertContentView(content_id, user_id);
-		return res.json(row);
-	} catch (err) {
-		console.error("updateContentView error:", err);
-		return res.status(500).json({ error: "Internal server error" });
-	}
-}
-
-/**
  * POST /content/adaptive
  * Body: { syllabus_id, content_type?, title, body, tags? }
  *
@@ -146,4 +111,4 @@ async function getContentItem(req, res) {
 	}
 }
 
-module.exports = { uploadContent, getContent, getContentViews, updateContentView, createAdaptiveContent, getContentItem };
+module.exports = { uploadContent, getContent, createAdaptiveContent, getContentItem };

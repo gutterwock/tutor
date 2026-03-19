@@ -27,17 +27,18 @@ async function runPipeline(userId) {
 
 async function isSubtopicComplete(userId, subtopicId) {
 	const contentRes = await pool.query(
-		`SELECT c.id,
-		        EXISTS (
-		          SELECT 1 FROM content_view cv
-		          WHERE cv.content_id = c.id AND cv.user_id = $1
-		        ) AS viewed
-		 FROM content c
-		 WHERE c.syllabus_id = $2 AND c.active = true AND c.base_content = true`,
+		`SELECT COUNT(*) AS total,
+		        COUNT(*) FILTER (WHERE sq.priority != -1 AND NOT (sq.priority BETWEEN 300 AND 399)) AS viewed
+		 FROM study_queue sq
+		 JOIN content c ON c.id = sq.item_id
+		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
+		   AND sq.item_type = 'content'
+		   AND c.base_content = true AND c.active = true`,
 		[userId, subtopicId]
 	);
-	if (contentRes.rows.length === 0) return false;
-	if (!contentRes.rows.every((r) => r.viewed)) return false;
+	const { total, viewed } = contentRes.rows[0];
+	if (parseInt(total, 10) === 0) return false;
+	if (parseInt(viewed, 10) < parseInt(total, 10)) return false;
 
 	const scoreRes = await pool.query(
 		`SELECT COUNT(r.id) AS response_count,
@@ -79,7 +80,13 @@ async function checkAndComplete(userId) {
 
 async function unlockNextForCourse(userId, courseId) {
 	const res = await pool.query(
-		`SELECT cp.subtopic_id, cp.active, cp.completed
+		`SELECT cp.subtopic_id, cp.active, cp.completed, s.prerequisites,
+		        EXISTS (
+		          SELECT 1 FROM study_queue sq
+		          WHERE sq.user_id = $1
+		            AND sq.subtopic_id = cp.subtopic_id
+		            AND sq.priority BETWEEN 300 AND 399
+		        ) AS has_tier3
 		 FROM content_progress cp
 		 JOIN syllabus s ON s.id = cp.subtopic_id
 		 JOIN syllabus t ON t.id = s.parent_id
@@ -89,29 +96,41 @@ async function unlockNextForCourse(userId, courseId) {
 	);
 
 	const rows = res.rows;
-	if (rows.length === 0) return null;
+	if (rows.length === 0) return [];
 
-	let lastCompletedIdx = -1;
+	// A subtopic is "passed" if formally completed, or active with no tier 3 items remaining
+	// (fallback: prevents users getting stuck when completion criteria are misconfigured)
+	const passedIds = new Set(
+		rows.filter((r) => r.completed || (r.active && !r.has_tier3)).map((r) => r.subtopic_id)
+	);
+	const unlocked = [];
+
 	for (let i = 0; i < rows.length; i++) {
-		if (rows[i].completed) lastCompletedIdx = i;
+		const row = rows[i];
+		if (row.active) continue;
+
+		const prereqs = row.prerequisites ?? [];
+		let canUnlock;
+		if (prereqs.length > 0) {
+			// Explicit prerequisites: all must be passed
+			canUnlock = prereqs.every((p) => passedIds.has(p));
+		} else {
+			// Linear fallback: first subtopic is free; others require the previous to be passed
+			canUnlock = i === 0 || passedIds.has(rows[i - 1].subtopic_id);
+		}
+
+		if (canUnlock) {
+			await pool.query(
+				`UPDATE content_progress SET active = true
+				 WHERE user_id = $1 AND subtopic_id = $2`,
+				[userId, row.subtopic_id]
+			);
+			await queueModel.promoteSubtopicItems(userId, row.subtopic_id);
+			unlocked.push(row.subtopic_id);
+		}
 	}
 
-	const nextIdx = lastCompletedIdx + 1;
-	if (nextIdx >= rows.length) return null;
-
-	const next = rows[nextIdx];
-	if (next.active) return null;
-
-	await pool.query(
-		`UPDATE content_progress SET active = true
-		 WHERE user_id = $1 AND subtopic_id = $2`,
-		[userId, next.subtopic_id]
-	);
-
-	// Promote unlocked items from -1 to tier 3 in the queue
-	await queueModel.promoteSubtopicItems(userId, next.subtopic_id);
-
-	return next.subtopic_id;
+	return unlocked;
 }
 
 async function unlockNext(userId) {
@@ -122,8 +141,8 @@ async function unlockNext(userId) {
 
 	const unlocked = [];
 	for (const { syllabus_id } of coursesRes.rows) {
-		const subtopicId = await unlockNextForCourse(userId, syllabus_id);
-		if (subtopicId) unlocked.push(subtopicId);
+		const ids = await unlockNextForCourse(userId, syllabus_id);
+		unlocked.push(...ids);
 	}
 	return unlocked;
 }

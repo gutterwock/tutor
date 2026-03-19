@@ -32,9 +32,6 @@ router.post("/responses", responseController.submitResponse);
 router.patch("/responses/:id/grade",    responseController.gradeResponseHandler);
 router.post("/responses/:id/grade-ai", responseController.gradeResponseAI);
 
-router.get("/content-views", contentController.getContentViews);
-router.put("/content-views", contentController.updateContentView);
-
 router.get("/progress", progressController.getProgress);
 router.get("/course-progress", progressController.getCourseProgress);
 router.get("/enrollments", progressController.getEnrollments);

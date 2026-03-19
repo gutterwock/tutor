@@ -1,6 +1,5 @@
 const pool = require("../config/db");
 const queueModel = require("../models/queueModel");
-const contentModel = require("../models/contentModel");
 
 /**
  * GET /queue?user_id=&course_ids=id1,id2&limit=10&question_only=true
@@ -126,7 +125,7 @@ async function getQueue(req, res) {
 
 /**
  * DELETE /queue/:id
- * For content items: moves the item down one priority tier and records a content view.
+ * For content items: moves the item down one priority tier.
  * For question items: no-op (tier already updated by response submission).
  */
 async function deleteQueueItem(req, res) {
@@ -145,11 +144,6 @@ async function deleteQueueItem(req, res) {
 
 		if (item.item_type === "content") {
 			await queueModel.consumeContent(id);
-			await contentModel.upsertContentView(item.item_id, item.user_id).catch((err) =>
-				console.warn("  [queue] content view upsert failed:", err.message)
-			);
-			// Promote gated questions that are now unblocked
-			await queueModel.promoteGatedQuestions(item.user_id, item.subtopic_id).catch(() => {});
 		}
 		// question items: tier already updated by response submission path — nothing to do
 

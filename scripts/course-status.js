@@ -8,12 +8,28 @@
  * Usage:
  *   node scripts/course-status.js              # all courses
  *   node scripts/course-status.js <course-id>  # one course
+ *
+ * Options:
+ *   --data-dir <path>  Path to courseData directory (default: ../courseData relative to script)
  */
 
 const fs = require("fs");
 const path = require("path");
 
-const COURSE_DATA_DIR = path.resolve(__dirname, "../courseData");
+// ---------------------------------------------------------------------------
+// Config (arg parsing must run before COURSE_DATA_DIR is used)
+// ---------------------------------------------------------------------------
+
+const _allArgs = process.argv.slice(2);
+let _courseDataDir = path.resolve(__dirname, "../courseData");
+
+for (let i = 0; i < _allArgs.length; i++) {
+  if (_allArgs[i] === "--data-dir") {
+    _courseDataDir = path.resolve(_allArgs[++i]);
+  }
+}
+
+const COURSE_DATA_DIR = _courseDataDir;
 
 // ---------------------------------------------------------------------------
 // Parse syllabus.md to extract subtopic IDs
@@ -189,7 +205,11 @@ function reportCourse(courseDir, courseId, displayName) {
 // Main
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const args = _allArgs.filter((a, i) => {
+  if (a === "--data-dir") return false;
+  if (i > 0 && _allArgs[i - 1] === "--data-dir") return false;
+  return !a.startsWith("--");
+});
 
 if (!fs.existsSync(COURSE_DATA_DIR)) {
   console.error(`courseData/ not found at ${COURSE_DATA_DIR}`);

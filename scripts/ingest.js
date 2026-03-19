@@ -12,6 +12,7 @@
  *
  * Options:
  *   --base-url <url>   API server base URL (default: http://localhost:3000)
+ *   --data-dir <path>  Path to courseData directory (default: ../courseData relative to script)
  *   --dry-run          Print what would be uploaded without making requests
  *   --convert-only     Parse markdown and write JSON to courseData/{id}/converted/ (no upload)
  */
@@ -25,17 +26,18 @@ const https = require("https");
 // Config
 // ---------------------------------------------------------------------------
 
-const COURSE_DATA_DIR = path.resolve(__dirname, "../courseData");
-
 const args = process.argv.slice(2);
 const courseArgs = [];
 let baseUrl = "http://localhost:3000";
 let dryRun = false;
 let convertOnly = false;
+let _courseDataDir = path.resolve(__dirname, "../courseData");
 
 for (let i = 0; i < args.length; i++) {
 	if (args[i] === "--base-url") {
 		baseUrl = args[++i];
+	} else if (args[i] === "--data-dir") {
+		_courseDataDir = path.resolve(args[++i]);
 	} else if (args[i] === "--dry-run") {
 		dryRun = true;
 	} else if (args[i] === "--convert-only") {
@@ -44,6 +46,8 @@ for (let i = 0; i < args.length; i++) {
 		courseArgs.push(args[i]);
 	}
 }
+
+const COURSE_DATA_DIR = _courseDataDir;
 
 // ---------------------------------------------------------------------------
 // HTTP helper (no external deps)
@@ -604,7 +608,7 @@ async function uploadContent(records, subtopicId) {
 		log(`    [dry-run] POST /content  (${subtopicId}, ${records.length} records)`);
 		return records.map((_, i) => `dry-run-${subtopicId}-content-${i}`);
 	}
-	const result = await post(`${baseUrl}/content`, records);
+	const result = await post(`${baseUrl}/content`, records.map((r, i) => ({ ...r, sort_order: i })));
 	log(`    content   ${subtopicId}  inserted=${result.inserted} skipped=${result.skipped}`);
 	return result.ids; // ordered UUIDs matching input record order
 }
@@ -619,9 +623,10 @@ async function uploadQuestions(records, subtopicId, contentIds = []) {
 		return;
 	}
 
-	// Resolve _contentBlockIdx → content_ids and strip the temporary field
-	const resolved = records.map(({ _contentBlockIdx, ...rest }) => ({
+	// Resolve _contentBlockIdx → content_ids, stamp sort_order, strip the temporary field
+	const resolved = records.map(({ _contentBlockIdx, ...rest }, i) => ({
 		...rest,
+		sort_order: i,
 		content_ids: (_contentBlockIdx >= 0 && contentIds[_contentBlockIdx])
 			? [contentIds[_contentBlockIdx]]
 			: [],

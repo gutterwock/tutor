@@ -27,7 +27,7 @@ function randInTier(tier) {
  */
 function nextPriority(currentPriority, success) {
 	const tier = tierOf(currentPriority);
-	if (!success) return randInTier(4);        // fail → tier 4
+	if (!success) return 400 + Math.floor(Math.random() * 99); // fail → 400–498 (499 left for prereq content)
 	if (tier === 4) return randInTier(2);       // tier 4 success → tier 2
 	if (tier === 0) return randInTier(0);       // tier 0 stays in tier 0
 	return randInTier(Math.max(0, tier - 1));   // down one tier
@@ -95,56 +95,113 @@ async function insertLocked(items) {
 }
 
 /**
- * Promote unlocked items for a subtopic from -1 to tier 3.
- * Content items and ungated questions (content_ids = '{}') are promoted immediately.
- * Gated questions remain at -1 until promoteGatedQuestions is called.
- * `bias` shifts the random range up within the tier (e.g. 74 → rand 374–399).
+ * Promote all locked items for a subtopic from -1 to tier 3 using position-based priorities.
+ *
+ * Content items (301–398, order-preserving):
+ *   N content items divide the 98-slot range into N equal segments.
+ *   Earlier items (lower sort_order) get higher-priority segments.
+ *
+ * Ungated questions (content_ids = []): fixed priority 399 (shown before any content).
+ *
+ * Gated questions (content_ids non-empty): random in [max(300, p−25), p−1]
+ *   where p is the priority of the anchor content block (latest prereq).
+ *   Multiple questions under the same block are assigned order-preserving
+ *   sub-segments within the band; ties occur when the band is narrower than M.
  */
-async function promoteSubtopicItems(userId, subtopicId, bias = 0) {
-	const lo = 300 + bias;
-	const range = 100 - bias;
+async function promoteSubtopicItems(userId, subtopicId) {
+	const CONTENT_LO = 301, CONTENT_HI = 398, CONTENT_RANGE = CONTENT_HI - CONTENT_LO + 1;
 
-	// Promote content items
-	await pool.query(
-		`UPDATE study_queue
-		 SET priority = ${lo} + floor(random() * ${range})::int
-		 WHERE user_id = $1 AND subtopic_id = $2 AND item_type = 'content' AND priority = -1`,
+	// ── Content items ─────────────────────────────────────────────────────────
+	const contentRes = await pool.query(
+		`SELECT sq.id AS queue_id, c.id AS content_id, c.sort_order
+		 FROM study_queue sq
+		 JOIN content c ON c.id = sq.item_id
+		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
+		   AND sq.item_type = 'content' AND sq.priority = -1
+		 ORDER BY c.sort_order`,
 		[userId, subtopicId]
 	);
 
-	// Promote ungated questions (content_ids empty)
-	await pool.query(
-		`UPDATE study_queue sq
-		 SET priority = ${lo} + floor(random() * ${range})::int
-		 FROM question q
+	const contentItems = contentRes.rows;
+	const N = contentItems.length;
+	const contentPriorityMap = {}; // content_id → assigned priority
+	const updates = [];             // { queue_id, priority }
+
+	for (let i = 0; i < N; i++) {
+		const segLo = CONTENT_LO + Math.floor(((N - 1 - i) * CONTENT_RANGE) / N);
+		const segHi = CONTENT_LO + Math.floor(((N - i) * CONTENT_RANGE) / N) - 1;
+		const priority = segLo >= segHi
+			? segLo
+			: segLo + Math.floor(Math.random() * (segHi - segLo + 1));
+		contentPriorityMap[contentItems[i].content_id] = priority;
+		updates.push({ queue_id: contentItems[i].queue_id, priority });
+	}
+
+	// ── Questions ─────────────────────────────────────────────────────────────
+	const questionRes = await pool.query(
+		`SELECT sq.id AS queue_id, q.content_ids, q.sort_order
+		 FROM study_queue sq
+		 JOIN question q ON q.id = sq.item_id
 		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
-		   AND sq.item_type = 'question' AND sq.priority = -1
-		   AND q.id = sq.item_id
-		   AND (q.content_ids = '{}' OR q.content_ids IS NULL)`,
+		   AND sq.item_type = 'question' AND sq.priority = -1`,
 		[userId, subtopicId]
 	);
-}
 
-/**
- * After a content item is viewed, promote any gated questions in the same subtopic
- * whose required content_ids have all been viewed by this user.
- */
-async function promoteGatedQuestions(userId, subtopicId) {
+	// Group gated questions by their anchor content (latest prereq = min priority value)
+	const ungated = [];
+	const gatedGroups = new Map(); // anchorContentId → [{ queue_id, sort_order }]
+
+	for (const q of questionRes.rows) {
+		const contentIds = q.content_ids ?? [];
+		if (contentIds.length === 0) {
+			ungated.push(q);
+		} else {
+			let anchorId = contentIds[0];
+			let minPrio = contentPriorityMap[anchorId] ?? CONTENT_LO;
+			for (const id of contentIds.slice(1)) {
+				const p = contentPriorityMap[id] ?? CONTENT_LO;
+				if (p < minPrio) { minPrio = p; anchorId = id; }
+			}
+			if (!gatedGroups.has(anchorId)) gatedGroups.set(anchorId, []);
+			gatedGroups.get(anchorId).push({ queue_id: q.queue_id, sort_order: q.sort_order });
+		}
+	}
+
+	// Ungated → 399
+	for (const q of ungated) {
+		updates.push({ queue_id: q.queue_id, priority: 399 });
+	}
+
+	// Gated → order-preserving within [max(300, p−25), p−1]
+	for (const [anchorId, questions] of gatedGroups) {
+		const p = contentPriorityMap[anchorId] ?? CONTENT_LO;
+		const bandLo = Math.max(300, p - 25);
+		const bandHi = p - 1;
+		const bandSize = bandHi - bandLo + 1;
+		const M = questions.length;
+
+		questions.sort((a, b) => a.sort_order - b.sort_order);
+
+		for (let j = 0; j < M; j++) {
+			const segLo = bandLo + Math.floor(((M - 1 - j) * bandSize) / M);
+			const segHi = bandLo + Math.floor(((M - j) * bandSize) / M) - 1;
+			const priority = segLo >= segHi
+				? segLo
+				: segLo + Math.floor(Math.random() * (segHi - segLo + 1));
+			updates.push({ queue_id: questions[j].queue_id, priority });
+		}
+	}
+
+	// ── Bulk UPDATE ───────────────────────────────────────────────────────────
+	if (updates.length === 0) return;
+	const queueIds  = updates.map((u) => u.queue_id);
+	const priorities = updates.map((u) => u.priority);
 	await pool.query(
 		`UPDATE study_queue sq
-		 SET priority = 300 + floor(random() * 100)::int
-		 FROM question q
-		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
-		   AND sq.item_type = 'question' AND sq.priority = -1
-		   AND q.id = sq.item_id
-		   AND array_length(q.content_ids, 1) > 0
-		   AND NOT EXISTS (
-		     SELECT 1 FROM unnest(q.content_ids) AS cid
-		     WHERE NOT EXISTS (
-		       SELECT 1 FROM content_view WHERE content_id = cid AND user_id = $1
-		     )
-		   )`,
-		[userId, subtopicId]
+		 SET priority = v.priority
+		 FROM unnest($1::uuid[], $2::int[]) AS v(queue_id, priority)
+		 WHERE sq.id = v.queue_id`,
+		[queueIds, priorities]
 	);
 }
 
@@ -181,6 +238,21 @@ async function transitionQuestionTier(userId, questionId, correctness) {
 	const { id, priority } = row.rows[0];
 	const newPriority = nextPriority(priority, success);
 	await pool.query(`UPDATE study_queue SET priority = $1 WHERE id = $2`, [newPriority, id]);
+
+	// On fail, push prereq content items to a random priority above the question (within tier 4)
+	if (!success) {
+		await pool.query(
+			`UPDATE study_queue sq
+			 SET priority = $3 + 1 + floor(random() * (499 - $3))::int
+			 FROM question q
+			 WHERE q.id = $2
+			   AND sq.user_id = $1
+			   AND sq.item_type = 'content'
+			   AND sq.item_id = ANY(q.content_ids)
+			   AND sq.priority >= 0`,
+			[userId, questionId, newPriority]
+		);
+	}
 }
 
 /**
@@ -236,7 +308,7 @@ async function getSubtopicScore(userId, subtopicId, window = 10) {
 
 module.exports = {
 	tieredFetch, queueSize,
-	insertLocked, promoteSubtopicItems, promoteGatedQuestions,
+	insertLocked, promoteSubtopicItems,
 	consumeContent, transitionQuestionTier, regressSubtopicItems,
 	clearCourseItems, getSubtopicScore,
 	tierOf, randInTier, nextPriority,

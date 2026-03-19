@@ -4,7 +4,7 @@ const { contentId } = require("../utils/deterministicId");
 /**
  * Set-diff upsert: compute deterministic IDs, delete removed records,
  * insert new records. Unchanged records (same ID already in DB) are untouched,
- * preserving content_view history. Adaptive content (base_content=false) is never touched.
+ * preserving queue history. Adaptive content (base_content=false) is never touched.
  */
 async function replaceBaseContent(syllabusId, rows) {
 	// Attach deterministic IDs
@@ -34,8 +34,8 @@ async function replaceBaseContent(syllabusId, rows) {
 
 		for (const row of toInsert) {
 			await client.query(
-				`INSERT INTO content (id, syllabus_id, active, base_content, content_type, title, body, tags, links, embedding, metadata)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+				`INSERT INTO content (id, syllabus_id, active, base_content, content_type, title, body, tags, links, embedding, metadata, sort_order)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 				[
 					row.id,
 					row.syllabus_id,
@@ -48,6 +48,7 @@ async function replaceBaseContent(syllabusId, rows) {
 					JSON.stringify(row.links ?? []),
 					row.embedding ?? null,
 					JSON.stringify(row.metadata ?? {}),
+					row.sort_order ?? 0,
 				]
 			);
 		}
@@ -92,47 +93,10 @@ async function getContent(filters = {}) {
 	return result.rows;
 }
 
-/**
- * Upsert a content_view record (increment view_count on conflict).
- */
-async function upsertContentView(contentId, userId) {
-	const now = Date.now();
-	const result = await pool.query(
-		`INSERT INTO content_view (content_id, user_id, last_shown, view_count)
-		 VALUES ($1, $2, $3, 1)
-		 ON CONFLICT (content_id, user_id) DO UPDATE
-		   SET last_shown = EXCLUDED.last_shown,
-		       view_count = content_view.view_count + 1
-		 RETURNING *`,
-		[contentId, userId, now]
-	);
-	return result.rows[0];
-}
-
-/**
- * Get content views for a user, optionally filtered by syllabus_id.
- */
-async function getContentViews(userId, syllabusId) {
-	const params = [userId];
-	let syllabusFilter = "";
-	if (syllabusId) {
-		params.push(syllabusId);
-		syllabusFilter = `AND c.syllabus_id = $2`;
-	}
-	const result = await pool.query(
-		`SELECT cv.*, c.title, c.syllabus_id
-		 FROM content_view cv
-		 JOIN content c ON c.id = cv.content_id
-		 WHERE cv.user_id = $1 ${syllabusFilter}
-		 ORDER BY cv.last_shown DESC`,
-		params
-	);
-	return result.rows;
-}
 
 async function getContentById(id) {
 	const result = await pool.query(`SELECT * FROM content WHERE id = $1`, [id]);
 	return result.rows[0] ?? null;
 }
 
-module.exports = { replaceBaseContent, getContent, upsertContentView, getContentViews, getContentById };
+module.exports = { replaceBaseContent, getContent, getContentById };

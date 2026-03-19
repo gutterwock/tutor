@@ -202,19 +202,16 @@ async function enrollInSyllabus(req, res) {
 
 		await queueModel.insertLocked(allItems);
 
-		// Promote up to 5 ungated items from the first active subtopic (bias rand 374–399)
+		// Promote first subtopic's items with position-based priorities,
+		// then guarantee the first item to be shown is at 399
 		if (subtopics.length > 0) {
-			await queueModel.promoteSubtopicItems(user_id, subtopics[0].id, 74);
-
-			// Cap at 5: demote any excess back to normal tier 3 range
+			await queueModel.promoteSubtopicItems(user_id, subtopics[0].id);
 			await pool.query(
-				`UPDATE study_queue
-				 SET priority = 300 + floor(random() * 74)::int
-				 WHERE id IN (
+				`UPDATE study_queue SET priority = 399
+				 WHERE id = (
 				   SELECT id FROM study_queue
-				   WHERE user_id = $1 AND subtopic_id = $2 AND priority BETWEEN 374 AND 399
-				   ORDER BY priority DESC
-				   OFFSET 5
+				   WHERE user_id = $1 AND subtopic_id = $2 AND priority >= 0
+				   ORDER BY priority DESC LIMIT 1
 				 )`,
 				[user_id, subtopics[0].id]
 			);

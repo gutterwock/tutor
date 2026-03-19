@@ -34,8 +34,8 @@ async function replaceBaseQuestions(syllabusId, rows) {
 
 		for (const row of toInsert) {
 			await client.query(
-				`INSERT INTO question (id, syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, passage, tags, content_ids, case_sensitive, embedding)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+				`INSERT INTO question (id, syllabus_id, active, base_content, difficulty, question_type, question_text, options, answer, explanation, passage, tags, content_ids, case_sensitive, embedding, sort_order)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 				[
 					row.id,
 					row.syllabus_id,
@@ -52,6 +52,7 @@ async function replaceBaseQuestions(syllabusId, rows) {
 					row.content_ids ?? [],
 					row.caseSensitive ?? false,
 					row.embedding ?? null,
+					row.sort_order ?? 0,
 				]
 			);
 		}

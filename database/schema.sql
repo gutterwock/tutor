@@ -42,7 +42,8 @@ CREATE TABLE content (
     tags         TEXT[] DEFAULT '{}',
     links        JSONB DEFAULT '[]',
     embedding    vector(384),
-    metadata     JSONB DEFAULT '{}'
+    metadata     JSONB DEFAULT '{}',
+    sort_order   INT NOT NULL DEFAULT 0
 );
 
 -- Content Progress: tracks subtopic unlock/completion state per user
@@ -54,16 +55,6 @@ CREATE TABLE content_progress (
     active      BOOLEAN NOT NULL DEFAULT false,
     completed   BOOLEAN NOT NULL DEFAULT false,
     UNIQUE (user_id, subtopic_id)
-);
-
--- Content View: tracks what content a user has seen
-CREATE TABLE content_view (
-    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    content_id UUID NOT NULL REFERENCES content(id) ON DELETE CASCADE,
-    user_id    UUID NOT NULL,
-    last_shown BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT,
-    view_count INTEGER NOT NULL DEFAULT 1,
-    UNIQUE (content_id, user_id)
 );
 
 -- Question: quiz questions tied to syllabus nodes
@@ -80,9 +71,10 @@ CREATE TABLE question (
     explanation    TEXT,                -- optional: shown after answering; for counterintuitive answers only
     passage        TEXT,               -- body of linked content block (show_with_content questions only)
     tags           TEXT[] DEFAULT '{}',
-    content_ids    UUID[] DEFAULT '{}', -- content blocks that must be viewed before this question is shown; [] = ungated
+    content_ids    UUID[] DEFAULT '{}', -- content block this question follows (used for on-fail prereq push); [] = ungated
     case_sensitive BOOLEAN NOT NULL DEFAULT false,  -- exactMatch only
-    embedding      vector(384)
+    embedding      vector(384),
+    sort_order     INT NOT NULL DEFAULT 0
 );
 
 -- Response: user answers to questions
@@ -111,8 +103,6 @@ CREATE INDEX idx_question_embedding  ON question  USING hnsw (embedding vector_c
 CREATE INDEX idx_syllabus_parent       ON syllabus(parent_id);
 CREATE INDEX idx_content_syllabus      ON content(syllabus_id);
 CREATE INDEX idx_content_active        ON content(active);
-CREATE INDEX idx_content_view_user     ON content_view(user_id);
-CREATE INDEX idx_content_view_content  ON content_view(content_id);
 CREATE INDEX idx_question_syllabus     ON question(syllabus_id);
 CREATE INDEX idx_question_active       ON question(active);
 CREATE INDEX idx_question_difficulty   ON question(difficulty);

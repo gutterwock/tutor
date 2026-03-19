@@ -73,36 +73,46 @@ function progressBar(completed, total, width = 20) {
  * Given the flat tiered fetch result, compose a session of `sessionSize` items.
  * reviewPct (0–100) controls what fraction comes from review tiers (0/1/2/4).
  * Tier 3 = new items. If one bucket is short, the other fills the remainder.
- * Final list is sorted by priority DESC (tier 4 first, then highest within tier).
+ * Final order: randomly interleaved across tiers, priority DESC preserved within each tier.
  */
 function composeSession(items, sessionSize, reviewPct) {
-	const newItems    = items.filter((i) => i.priority >= 300 && i.priority <= 399);
-	const reviewItems = items.filter((i) => i.priority < 300 || i.priority >= 400)
-		.sort((a, b) => b.priority - a.priority);
+	const newItems    = items.filter((i) => i.priority >= 300).sort((a, b) => b.priority - a.priority);
+	const reviewItems = items.filter((i) => i.priority >= 0 && i.priority < 300).sort((a, b) => b.priority - a.priority);
 
 	const targetNew    = Math.max(0, Math.floor(sessionSize * (1 - reviewPct / 100)));
 	const targetReview = sessionSize - targetNew;
 
-	const chosen = [];
-
 	const fromNew    = newItems.slice(0, targetNew);
 	const fromReview = reviewItems.slice(0, targetReview);
 
-	chosen.push(...fromNew, ...fromReview);
+	const chosen = [...fromNew, ...fromReview];
 
 	// Fill gaps
 	if (fromNew.length < targetNew) {
 		const gap = targetNew - fromNew.length;
-		const extra = reviewItems.slice(targetReview, targetReview + gap);
-		chosen.push(...extra);
+		chosen.push(...reviewItems.slice(targetReview, targetReview + gap));
 	} else if (fromReview.length < targetReview) {
 		const gap = targetReview - fromReview.length;
-		const extra = newItems.slice(targetNew, targetNew + gap);
-		chosen.push(...extra);
+		chosen.push(...newItems.slice(targetNew, targetNew + gap));
 	}
 
-	// Sort: priority DESC so tier 4 (urgent) comes first
-	return chosen.sort((a, b) => b.priority - a.priority);
+	// Group into per-tier buckets sorted by priority DESC (preserves within-tier order)
+	const tierMap = new Map();
+	for (const item of chosen) {
+		const tier = Math.floor(item.priority / 100);
+		if (!tierMap.has(tier)) tierMap.set(tier, []);
+		tierMap.get(tier).push(item);
+	}
+	const buckets = [...tierMap.values()].map((b) => b.sort((a, b) => b.priority - a.priority));
+
+	// Randomly interleave across tiers: pick a random non-empty bucket at each step
+	const result = [];
+	while (buckets.some((b) => b.length > 0)) {
+		const nonEmpty = buckets.filter((b) => b.length > 0);
+		const bucket = nonEmpty[Math.floor(Math.random() * nonEmpty.length)];
+		result.push(bucket.shift());
+	}
+	return result;
 }
 
 // ── settings menu ─────────────────────────────────────────────────────────────
@@ -495,7 +505,7 @@ async function studySession(userId, settings, questionOnly = false) {
 		return;
 	}
 
-	const hasReview = items.some((i) => i.priority < 300 || i.priority >= 400);
+	const hasReview = items.some((i) => i.priority >= 0 && i.priority < 300);
 	console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
 	await pause();
 

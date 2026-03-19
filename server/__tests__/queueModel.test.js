@@ -15,7 +15,6 @@ const {
 	transitionQuestionTier,
 	consumeContent,
 	insertLocked,
-	promoteSubtopicItems,
 } = require("../src/models/queueModel");
 
 afterEach(() => jest.clearAllMocks());
@@ -149,8 +148,9 @@ describe("transitionQuestionTier", () => {
 
 	test("fail (correctness < 3) sends item to tier 4", async () => {
 		pool.query
-			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 350 }] })
-			.mockResolvedValueOnce({ rows: [] });
+			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 350 }] }) // SELECT
+			.mockResolvedValueOnce({ rows: [] })                                // UPDATE question
+			.mockResolvedValueOnce({ rows: [] });                               // UPDATE prereq content
 
 		await transitionQuestionTier(userId, questionId, 1);
 
