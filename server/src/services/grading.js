@@ -8,6 +8,32 @@
 const { callAI } = require("./ai");
 
 /**
+ * Grade an exactMatch response via AI when deterministic matching failed.
+ * Checks whether the student's answer is equivalent in meaning to any accepted answer.
+ * Returns 0 or 4 only.
+ */
+async function gradeExactMatchAI(questionText, acceptedAnswers, userAnswer) {
+	const answers = Array.isArray(acceptedAnswers) ? acceptedAnswers : [acceptedAnswers];
+	const prompt =
+		`In the context of the following question, is the student's answer equivalent in meaning to any of the accepted answers?\n` +
+		`Return ONLY a JSON object with a single key "correctness" set to 0 or 4:\n` +
+		`  4 = equivalent to one of the accepted answers\n` +
+		`  0 = not equivalent to any accepted answer\n\n` +
+		`Question: ${questionText}\n` +
+		`Accepted answers: ${JSON.stringify(answers)}\n` +
+		`Student answer: ${JSON.stringify(userAnswer)}\n\n` +
+		`Respond with JSON only. Example: {"correctness": 4}`;
+
+	const raw = await callAI(prompt);
+	const match = raw.match(/"correctness"\s*:\s*([04])/);
+	if (!match) {
+		console.warn(`[grading] unparseable AI response: ${raw.slice(0, 120)}`);
+		return 0;
+	}
+	return parseInt(match[1], 10);
+}
+
+/**
  * Grade a freeText response via AI. Returns 0–4.
  */
 async function gradeFreeText(questionText, expectedAnswer, userAnswer) {
@@ -105,4 +131,4 @@ function toStringArray(val) {
 	return (Array.isArray(val) ? val : [val]).map((v) => String(v ?? "").trim());
 }
 
-module.exports = { gradeSingleChoice, gradeMultiChoice, gradeOrdering, gradeExactMatch, gradeResponse, gradeFreeText };
+module.exports = { gradeSingleChoice, gradeMultiChoice, gradeOrdering, gradeExactMatch, gradeResponse, gradeFreeText, gradeExactMatchAI };

@@ -1,7 +1,7 @@
 const pool = require("../config/db");
 const responseModel = require("../models/responseModel");
 const queueModel = require("../models/queueModel");
-const { gradeResponse, gradeFreeText } = require("../services/grading");
+const { gradeResponse, gradeFreeText, gradeExactMatchAI } = require("../services/grading");
 const { runPipeline } = require("../services/pipeline");
 
 /**
@@ -69,8 +69,8 @@ async function submitResponse(req, res) {
 		}
 		const q = qRes.rows[0];
 
-		if (q.question_type === "freeText") {
-			// Store ungraded — caller must follow up with PATCH /responses/:id/grade
+		if (q.question_type === "freeText" || q.question_type === "exactMatch") {
+			// Store ungraded — caller must follow up with POST .../grade-ai or PATCH .../grade
 			const row = await responseModel.submitUngraded(question_id, user_id, user_answer);
 			return res.status(201).json({
 				...row,
@@ -80,7 +80,7 @@ async function submitResponse(req, res) {
 			});
 		}
 
-		// Deterministic grading for singleChoice / multiChoice / ordering / exactMatch
+		// Deterministic grading for singleChoice / multiChoice / ordering
 		correctness = gradeResponse(q.question_type, user_answer, q.answer, { caseSensitive: q.case_sensitive }) ?? 0;
 		const row = await responseModel.submitResponse(question_id, user_id, user_answer, correctness);
 		await queueModel.transitionQuestionTier(user_id, question_id, correctness).catch(() => {});
@@ -154,11 +154,13 @@ async function gradeResponseAI(req, res) {
 			return res.status(404).json({ error: `Response ${id} not found` });
 		}
 		const r = qRes.rows[0];
-		if (r.question_type !== "freeText") {
-			return res.status(400).json({ error: "Only freeText responses can be AI-graded" });
+		if (r.question_type !== "freeText" && r.question_type !== "exactMatch") {
+			return res.status(400).json({ error: "Only freeText and exactMatch responses can be AI-graded" });
 		}
 
-		const score = await gradeFreeText(r.question_text, r.answer, r.user_answer);
+		const score = r.question_type === "exactMatch"
+			? await gradeExactMatchAI(r.question_text, r.answer, r.user_answer)
+			: await gradeFreeText(r.question_text, r.answer, r.user_answer);
 		const row = await responseModel.setGrade(id, score);
 		await queueModel.transitionQuestionTier(user_id, r.question_id, score).catch(() => {});
 		const pipeline = await runPipeline(user_id);

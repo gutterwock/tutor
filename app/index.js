@@ -59,6 +59,32 @@ const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 const pause = () => ask("\nPress Enter to continue...");
 const hr = () => console.log("\n" + "─".repeat(60));
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+/**
+ * Shuffle the values across option keys, keeping the displayed letters (a/b/c/d) the same.
+ * Returns shuffledOptions (same keys, values reassigned) and keyToOriginal (display key → original key).
+ * When the user picks display key "a", keyToOriginal["a"] gives the real answer key to submit.
+ */
+function shuffleOptions(options) {
+	const keys = Object.keys(options);
+	if (keys.length <= 1) {
+		return { shuffledOptions: options, keyToOriginal: Object.fromEntries(keys.map((k) => [k.toLowerCase(), k.toLowerCase()])) };
+	}
+	// Fisher-Yates on index array
+	const indices = keys.map((_, i) => i);
+	for (let i = indices.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		[indices[i], indices[j]] = [indices[j], indices[i]];
+	}
+	const shuffledOptions = {};
+	const keyToOriginal = {};
+	keys.forEach((displayKey, i) => {
+		const originalKey = keys[indices[i]];
+		shuffledOptions[displayKey] = options[originalKey];
+		keyToOriginal[displayKey.toLowerCase()] = originalKey.toLowerCase();
+	});
+	return { shuffledOptions, keyToOriginal };
+}
 const clear = () => process.stdout.write("\x1Bc");
 
 function progressBar(completed, total, width = 20) {
@@ -377,15 +403,16 @@ async function askQuestion(data) {
 	const validKeys = data.options ? Object.keys(data.options).map((k) => k.toLowerCase()) : [];
 
 	if (data.question_type === "singleChoice") {
-		console.log(formatOptions(data.options) + "\n");
+		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
+		console.log(formatOptions(shuffledOptions) + "\n");
 		let input;
 		while (true) {
 			input = (await ask("Answer: ")).trim().toLowerCase();
 			if (input && validKeys.includes(input)) break;
 			console.log(`  Enter one of: ${validKeys.join(", ")}`);
 		}
-		userAnswer = input;
-		const isCorrect = input === String(data.answer).toLowerCase();
+		userAnswer = keyToOriginal[input];
+		const isCorrect = userAnswer === String(data.answer).toLowerCase();
 		correctness = isCorrect ? 4 : 0;
 		if (isCorrect) {
 			console.log("\n  ✓ Correct!");
@@ -396,7 +423,8 @@ async function askQuestion(data) {
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "multiChoice") {
-		console.log(formatOptions(data.options) + "\n");
+		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
+		console.log(formatOptions(shuffledOptions) + "\n");
 		let parts;
 		while (true) {
 			const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim().toLowerCase();
@@ -404,7 +432,7 @@ async function askQuestion(data) {
 			if (parts.length > 0 && parts.every((k) => validKeys.includes(k))) break;
 			console.log(`  Enter one or more of: ${validKeys.join(", ")}`);
 		}
-		userAnswer = parts;
+		userAnswer = parts.map((k) => keyToOriginal[k]);
 		const expected = (Array.isArray(data.answer) ? data.answer : [data.answer]).map((v) => String(v).trim().toLowerCase());
 		const isCorrect = JSON.stringify([...userAnswer].sort()) === JSON.stringify([...expected].sort());
 		correctness = isCorrect ? 4 : 0;
@@ -433,12 +461,18 @@ async function askQuestion(data) {
 			return input.toLowerCase() === expected.toLowerCase() ||
 				stripAccents(input).toLowerCase() === stripAccents(expected).toLowerCase();
 		});
-		correctness = isCorrect ? 4 : 0;
-		console.log(isCorrect ? "\n  ✓ Correct!" : `\n  ✗ Incorrect — accepted: ${answers.join(" / ")}`);
-		if (data.explanation) console.log(`\n  ${data.explanation}`);
+		if (isCorrect) {
+			correctness = 4;
+			console.log("\n  ✓ Correct!");
+			if (data.explanation) console.log(`\n  ${data.explanation}`);
+		} else {
+			// Deterministic match failed — fall back to AI to check for equivalent answers
+			return { correctness: 0, userAnswer, needsAiGrading: true };
+		}
 
 	} else if (data.question_type === "ordering") {
-		console.log(formatOptions(data.options) + "\n");
+		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
+		console.log(formatOptions(shuffledOptions) + "\n");
 		let parts;
 		while (true) {
 			const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim().toLowerCase();
@@ -446,7 +480,7 @@ async function askQuestion(data) {
 			if (parts.length === validKeys.length && parts.every((k) => validKeys.includes(k))) break;
 			console.log(`  Enter all ${validKeys.length} keys in order: ${validKeys.join(", ")}`);
 		}
-		userAnswer = parts;
+		userAnswer = parts.map((k) => keyToOriginal[k]);
 		const expected = (Array.isArray(data.answer) ? data.answer : []).map((k) => String(k).toLowerCase());
 		correctness = JSON.stringify(userAnswer) === JSON.stringify(expected) ? 4 : 0;
 		const correctOrder = (Array.isArray(data.answer) ? data.answer : [])
@@ -525,9 +559,9 @@ async function studySession(userId, settings, questionOnly = false) {
 
 		} else {
 			hr();
-			let { correctness, userAnswer } = await askQuestion(data);
+			let { correctness, userAnswer, needsAiGrading } = await askQuestion(data);
 			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
-			if (data.question_type !== "freeText") submitBody.correctness = correctness;
+			if (data.question_type !== "freeText" && !needsAiGrading) submitBody.correctness = correctness;
 			const submitted = await api("POST", "/responses", submitBody);
 
 			if (submitted.needs_grading) {
@@ -538,7 +572,11 @@ async function studySession(userId, settings, questionOnly = false) {
 				if (graded) {
 					const labels = ["Wrong", "Mostly wrong", "Partial", "Mostly correct", "Correct"];
 					console.log(`  Grade: ${graded.correctness}/4 — ${labels[graded.correctness] ?? "?"}`);
-					if (data.answer) console.log(`\n  Example answer: ${data.answer}`);
+					if (data.answer) {
+						const answerLabel = data.question_type === "exactMatch" ? "Accepted" : "Example answer";
+						const answerText = Array.isArray(data.answer) ? data.answer.join(" / ") : data.answer;
+						console.log(`\n  ${answerLabel}: ${answerText}`);
+					}
 					if (data.explanation) console.log(`\n  ${data.explanation}`);
 					correctness = graded.correctness;
 				} else {
