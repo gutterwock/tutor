@@ -9,6 +9,9 @@ const path = require('path');
  * Usage:
  *   node scripts/review-courses.js                    # all courses
  *   node scripts/review-courses.js spanish-a1-core    # one course
+ *
+ * Options:
+ *   --data-dir <path>  Path to courseData directory (default: ../courseData relative to script)
  */
 
 const VALID_PHASES = ['phase:atomic', 'phase:complex', 'phase:integration'];
@@ -210,7 +213,7 @@ function reviewFile(filePath) {
   return { errors, warnings, validator };
 }
 
-const COURSE_DATA_DIR = path.join(__dirname, '../courseData');
+let COURSE_DATA_DIR = path.join(__dirname, '../courseData');
 
 function isCourseDir(dirPath) {
   return fs.existsSync(path.join(dirPath, 'syllabus.md')) ||
@@ -300,8 +303,19 @@ function reviewAllCourses() {
   return totalErrors === 0;
 }
 
-// CLI
-const arg = process.argv[2];
+// CLI — parse --data-dir then dispatch
+const _allArgs = process.argv.slice(2);
+const courseArgs = [];
+
+for (let i = 0; i < _allArgs.length; i++) {
+  if (_allArgs[i] === '--data-dir') {
+    COURSE_DATA_DIR = path.resolve(_allArgs[++i]);
+  } else {
+    courseArgs.push(_allArgs[i]);
+  }
+}
+
+const arg = courseArgs[0];
 
 if (!arg) {
   const success = reviewAllCourses();

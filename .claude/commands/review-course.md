@@ -31,7 +31,7 @@ reviewed: 2026-03-10
 
 ## Pass 1 — Script validation (fast)
 
-Run `node scripts/review-courses.js <course-id>` via Bash. This catches structural issues instantly:
+Run `node scripts/review-courses.js <course-id>` via Bash (add `--data-dir <path>` if courseData is not at the default location). This catches structural issues instantly:
 - Answer keys not matching options
 - Invalid characters in answer keys
 - Missing answer keys or options

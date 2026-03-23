@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Bash(node scripts/review-courses.js*)",
+      "Bash(grep * courseData/**)",
       "Read(.claude/**)",
       "Edit(courseData/**)",
       "Read(courseData/**)",

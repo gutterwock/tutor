@@ -25,7 +25,7 @@ The course reference is the first token and may be either `{course-id}` (direct)
    - Parse the input to extract subject, group (if path contains `/`), prerequisites, and exam (as below)
 
 **For new courses, extract:**
-- **course-ref** – slug for the course, e.g. `aws-security-specialty` or `japanese/japanese-n5` (nested under a program group)
+- **course-ref** – slug for the course, e.g. `intro-to-python` or `languages/french-a1` (nested under a program group)
 - **subject** – what the course covers (e.g. "AWS Security Specialty cert", "Spanish A2 proficiency", "Econ 101")
 - **prerequisites** – prior knowledge required. Default to none if not specified.
 - **exam** – whether this is for a specific exam/cert, and whether the user only cares about passing vs. deep learning. Default to null if not specified.
@@ -49,7 +49,7 @@ Guideline limits per course: ~10 topics, ~60 subtopics, ~1000 content+question b
 
 ### Output File Structure
 
-Course reference = lowercase hyphenated slug, optionally prefixed by a group: `aws-security-specialty` or `japanese/japanese-n5`. Write to `courseData/{course-ref}/`: `syllabus.md` + one `{subtopic-id}.md` per subtopic (content and questions colocated). The syllabus `id:` field uses only the leaf course slug (e.g. `japanese-n5`), not the group prefix.
+Course reference = lowercase hyphenated slug, optionally prefixed by a group: `intro-to-python` or `languages/french-a1`. Write to `courseData/{course-ref}/`: `syllabus.md` + one `{subtopic-id}.md` per subtopic (content and questions colocated). The syllabus `id:` field uses only the leaf course slug (e.g. `french-a1`), not the group prefix.
 
 ---
 

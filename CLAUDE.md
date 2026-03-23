@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**tutor.ai** is an adaptive learning platform using RAG (Retrieval-Augmented Generation) with PostgreSQL pgvector to personalize content and question delivery based on user performance. The platform generates and serves course content, tracks user responses, and uses 384-dim vector embeddings for semantic search.
+**tutor** is an adaptive learning platform using RAG (Retrieval-Augmented Generation) with PostgreSQL pgvector to personalize content and question delivery based on user performance. The platform generates and serves course content, tracks user responses, and uses 384-dim vector embeddings for semantic search.
 
 ## Commands
 
@@ -64,12 +64,13 @@ npm run dev             # start with nodemon (auto-restart)
 
 ```bash
 node scripts/ingest.js                              # all courses
-node scripts/ingest.js aws-security-specialty       # one direct course
-node scripts/ingest.js japanese/japanese-n5         # nested course (group/course-id)
-node scripts/ingest.js japanese                     # all courses in a group
+node scripts/ingest.js intro-to-python              # one direct course
+node scripts/ingest.js languages/french-a1          # nested course (group/course-id)
+node scripts/ingest.js languages                    # all courses in a group
 node scripts/ingest.js --dry-run                    # preview without hitting server
 node scripts/ingest.js --base-url http://host:3000 <ref>
 node scripts/ingest.js --convert-only               # parse markdown → JSON files in courseData/{ref}/converted/
+node scripts/ingest.js --data-dir /path/to/data     # override courseData/ location (default: ./courseData)
 ```
 
 Parses and uploads `courseData/` files (markdown or legacy JSON) to the running API server: syllabus first, then content and questions per subtopic. Supports both direct (`courseData/{course-id}/`) and nested (`courseData/{group}/{course-id}/`) layouts. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
@@ -107,7 +108,7 @@ prompt/         Schema reference and API endpoint definitions for AI context
 - **`index.js`** — Express app with Helmet, CORS, HPP, Morgan, and rate limiting (100 req/15 min). Mounts all routes and starts the cron. JSON body limit 10 MB.
 - **`routes/index.js`** — All API endpoints wired to controllers.
 - **`config/db.js`** — `pg.Pool`. Env vars: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (all default to `rag`).
-- **`services/embedding.js`** — `@huggingface/transformers`, `Xenova/all-MiniLM-L6-v2` (384-dim). Lazy-loaded. Disabled by default; set `ENABLE_EMBEDDINGS=true` to activate (downloads ~90 MB model on first call). Exports `generateEmbedding`, `generateEmbeddings`, `pgVector`.
+- **`services/embedding.js`** — `@huggingface/transformers`, `Xenova/all-MiniLM-L6-v2` (384-dim). Lazy-loaded. Disabled by default; set `ENABLE_EMBEDDINGS=true` to activate (downloads ~90 MB model on first call). The package is an **optional dependency** — not installed by default. To use embeddings: `npm install --include=optional` in `server/`, or build the Docker image with `--build-arg ENABLE_EMBEDDINGS=true`. Exports `generateEmbedding`, `generateEmbeddings`, `pgVector`.
 - **`services/ai.js`** — AI dispatch abstraction. `callAI(prompt)` spawns `claude --model $AI_MODEL -p` as a subprocess (local mode). Cloud mode is a TODO stub. Controlled by `AI_MODE` env var (default: `local`); model by `AI_MODEL` (default: `claude-haiku-4-5-20251001`).
 - **`services/grading.js`** — All grading logic: deterministic (`gradeSingleChoice`, `gradeMultiChoice`, `gradeOrdering`) and AI-based (`gradeFreeText` — calls `callAI`). Used by the response controller, cron, and `grade-ai` endpoint.
 - **`services/adaptiveGenerator.js`** — Adaptive content/question generation for struggling subtopics. Fetches context + recent wrong answers, calls `callAI`, parses JSON response, persists items as `base_content=false`. Runs once per subtopic (guards against re-triggering). Called via `POST /generate-adaptive` at the user's prompt at session end.
@@ -170,7 +171,7 @@ Seven tables in PostgreSQL with pgvector HNSW indexes (cosine similarity) on all
 | `response` | `question_id`, `user_id`, `user_answer` JSONB, `correctness` (0–4), `responded_at` (epoch ms), `graded_at` (epoch ms, NULL until cron grades it) |
 | `study_queue` | `user_id`, `course_id`, `subtopic_id`, `item_type` (content/question), `item_id`, `priority` INT; unique on `(user_id, item_type, item_id)` |
 
-Timestamps are 13-digit epoch milliseconds (BIGINT). Syllabus IDs use slug hierarchy: `spanish-b2` (course) → `spanish-b2.1` (topic) → `spanish-b2.1.1` (subtopic). Other IDs are UUIDs.
+Timestamps are 13-digit epoch milliseconds (BIGINT). Syllabus IDs use slug hierarchy: `my-course` (course) → `my-course.1` (topic) → `my-course.1.1` (subtopic). Other IDs are UUIDs.
 
 `graded_at` is set by the cron or the `grade-ai` endpoint, on `freeText` responses. It is NULL on insert and used to detect ungraded responses (as opposed to responses correctly scored 0). The cron acts as a fallback for any responses not graded in real-time.
 
@@ -194,19 +195,18 @@ courseData/{group}/{course-id}/      # grouped (courses belonging to a program)
 
 A directory is recognised as a **course** if it contains `syllabus.md` or `syllabus.json`. A directory without a syllabus file is treated as a **group** and its subdirectories are scanned for courses (one level only).
 
-The syllabus `id:` field always uses the leaf course slug (e.g. `japanese-n5`), not the group prefix.
+The syllabus `id:` field always uses the leaf course slug (e.g. `french-a1`), not the group prefix.
 
 Legacy JSON format is still supported (see `docs/` for schema). The ingest script prefers `.md` when both exist.
-
-Current courses: `aws-security-specialty`, `japanese-phonetics`, `mandarin-hanzi-hsk1-2`.
 
 Check generation progress:
 
 ```bash
 node scripts/course-status.js                    # all courses (both layouts)
-node scripts/course-status.js aws-security-specialty
-node scripts/course-status.js japanese           # all courses in a group
-node scripts/course-status.js japanese/japanese-n5
+node scripts/course-status.js intro-to-python
+node scripts/course-status.js languages         # all courses in a group
+node scripts/course-status.js languages/french-a1
+node scripts/course-status.js --data-dir /path  # override courseData/ location
 ```
 
 ### Learning Phases
@@ -377,8 +377,8 @@ Located in `.claude/commands/`:
 
 Resume syntax examples:
 ```
-/generate-course spanish-a2 resume
-/generate-course spanish-a2 from topic 3 content
-/generate-course spanish-a2 regenerate topic 2
-/generate-course japanese/japanese-n5 resume
+/generate-course intro-to-python resume
+/generate-course intro-to-python from topic 3 content
+/generate-course intro-to-python regenerate topic 2
+/generate-course languages/french-a1 resume
 ```

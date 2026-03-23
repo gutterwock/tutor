@@ -4,8 +4,16 @@ let _pipeline = null;
 
 async function getPipeline() {
 	if (_pipeline) return _pipeline;
-	const { pipeline } = await import("@huggingface/transformers");
-	_pipeline = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+	let pipelineFn;
+	try {
+		({ pipeline: pipelineFn } = await import("@huggingface/transformers"));
+	} catch {
+		throw new Error(
+			"@huggingface/transformers is not installed. " +
+			"Run: npm install --include=optional  (or build with --build-arg ENABLE_EMBEDDINGS=true)"
+		);
+	}
+	_pipeline = await pipelineFn("feature-extraction", "Xenova/all-MiniLM-L6-v2");
 	return _pipeline;
 }
 

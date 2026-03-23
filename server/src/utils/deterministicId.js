@@ -2,7 +2,7 @@ const crypto = require("crypto");
 
 /**
  * UUID v5 (SHA-1 namespaced) implementation using Node built-in crypto.
- * Project namespace: a fixed UUID constant unique to tutor.ai.
+ * Project namespace: a fixed UUID constant unique to tutor.
  */
 const NAMESPACE = "1f79ae9d-4b8c-5e3f-9a1d-7b2c4e6f8a0b";
 

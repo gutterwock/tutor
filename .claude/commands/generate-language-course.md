@@ -27,7 +27,7 @@ Language courses must be scoped to a single CEFR/equivalent level. If no level g
 
 ### Override: Course ID
 
-Slug from language + level: `spanish-a2`, `japanese-n3`, `mandarin-hsk3`.
+Slug from language + level: `french-a1`, `spanish-b2`, `mandarin-hsk3`.
 
 ---
 

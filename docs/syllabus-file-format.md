@@ -22,7 +22,7 @@ Follow the heading, one key per line. List values (`prerequisites:`, `objectives
 
 | Key | Required | Notes |
 |-----|----------|-------|
-| `id:` | yes | Course slug, e.g. `aws-security-specialty` |
+| `id:` | yes | Course slug, e.g. `intro-to-python` |
 | `description:` | yes | Single line |
 | `prerequisites:` | no | List of free-text knowledge/skill requirements |
 | `exam:` | no | Exam name if this is exam prep |
@@ -31,43 +31,41 @@ Follow the heading, one key per line. List values (`prerequisites:`, `objectives
 
 | Key | Required | Notes |
 |-----|----------|-------|
-| `id:` | yes | e.g. `aws-security-specialty.1` |
+| `id:` | yes | e.g. `intro-to-python.1` |
 | `description:` | no | Single line |
 
 ### Subtopic fields
 
 | Key | Required | Notes |
 |-----|----------|-------|
-| `id:` | yes | e.g. `aws-security-specialty.1.1` |
+| `id:` | yes | e.g. `intro-to-python.1.1` |
 | `objectives:` | no | List of learning objectives |
 | `prerequisites:` | no | List of subtopic IDs that must be completed first |
 
 ## Example
 
 ```markdown
-# AWS Security Specialty (SCS-C02)
-id: aws-security-specialty
-description: Preparation for the AWS Certified Security - Specialty (SCS-C02) exam.
+# Introduction to Python
+id: intro-to-python
+description: Foundational Python programming for beginners with no prior experience.
 prerequisites:
-- AWS Cloud Practitioner or Associate-level certification
-- 2+ years hands-on experience securing AWS workloads
-exam: AWS Certified Security - Specialty (SCS-C02)
+- Basic computer literacy
 
-## Threat Detection and Incident Response
-id: aws-security-specialty.1
-description: Threat detection, incident response, and automated remediation. (Exam Domain 1 — 14%)
+## Core Language Basics
+id: intro-to-python.1
+description: Variables, data types, operators, and control flow.
 
-### Amazon GuardDuty
-id: aws-security-specialty.1.1
+### Variables and Data Types
+id: intro-to-python.1.1
 objectives:
-- Explain how GuardDuty uses VPC Flow Logs, DNS logs, and CloudTrail events
-- Configure GuardDuty across multiple accounts using AWS Organizations
+- Declare variables and assign values
+- Identify and use Python's built-in data types
 
-### AWS Security Hub and Amazon Detective
-id: aws-security-specialty.1.2
+### Control Flow
+id: intro-to-python.1.2
 prerequisites:
-- aws-security-specialty.1.1
+- intro-to-python.1.1
 objectives:
-- Enable and configure Security Hub with compliance standards
-- Use Amazon Detective to investigate security findings
+- Write if/elif/else statements
+- Use for and while loops to iterate
 ```

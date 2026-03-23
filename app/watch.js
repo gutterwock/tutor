@@ -92,7 +92,7 @@ async function main() {
 
 	const userId = fs.readFileSync(ID_FILE, "utf8").trim();
 
-	console.log(`\ntutor.ai response watcher  (user: ${userId.slice(0, 8)}…)`);
+	console.log(`\ntutor response watcher  (user: ${userId.slice(0, 8)}…)`);
 	console.log(`Polling every ${POLL_MS / 1000}s — Ctrl+C to stop\n`);
 	console.log("─".repeat(60));
 

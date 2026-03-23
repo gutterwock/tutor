@@ -633,7 +633,7 @@ async function main() {
 
 	while (true) {
 		clear();
-		console.log(`tutor.ai  (user: ${userId.slice(0, 8)}…)\n`);
+		console.log(`tutor  (user: ${userId.slice(0, 8)}…)\n`);
 		console.log("  1.  Study  ← Enter");
 		console.log("  2.  Quiz");
 		console.log("  3.  Manage courses");

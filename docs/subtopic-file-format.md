@@ -17,8 +17,8 @@ Filenames are for organisation only. `syllabus_id` is declared inside the file.
 The file must open with a `syllabus_id:` line. An optional `# Title` follows for human readability.
 
 ```markdown
-syllabus_id: aws-security-specialty.1.1
-# GuardDuty — Fundamentals
+syllabus_id: intro-to-python.1.1
+# Control Flow — Loops and Conditionals
 ```
 
 ## Block types
@@ -67,8 +67,8 @@ phase:integration content and questions
 ## Full example
 
 ````markdown
-syllabus_id: aws-security-specialty.1.1
-# IAM — Users and Roles
+syllabus_id: intro-to-python.1.1
+# Variables and Data Types
 
 ### question singleChoice difficulty:1
 tags: phase:atomic

@@ -11,7 +11,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@huggingface/transformers": "^3.4.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
@@ -19,6 +18,9 @@
     "hpp": "^0.2.3",
     "morgan": "^1.10.1",
     "pg": "^8.13.3"
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^3.4.2"
   },
   "devDependencies": {
     "jest": "^30.2.0",

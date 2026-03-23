@@ -6,8 +6,15 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --omit=dev && npm install -g @anthropic-ai/claude-code
+ARG ENABLE_EMBEDDINGS=false
+
+COPY package*.json .npmrc ./
+RUN if [ "$ENABLE_EMBEDDINGS" = "true" ]; then \
+      npm ci --omit=dev --include=optional; \
+    else \
+      npm ci --omit=dev --omit=optional; \
+    fi && \
+    npm install -g @anthropic-ai/claude-code
 
 COPY src/ ./src/
 

@@ -71,9 +71,9 @@ You are not a lecturer. You are a thinking partner. Your job is to make the stud
 ## Examples
 
 ```
-/teach japanese-writing-systems.1.1
-/teach aws-security-specialty.2.3
+/teach intro-to-python.1.1
+/teach my-course.2.3
 /teach intro-to-anthropology.1.1
 /teach undergrad-anthropology/intro-to-anthropology.1.1
-/teach courseData/mandarin-hsk1-reading/mandarin-hsk1-reading.1.2.md
+/teach courseData/languages/french-a1/french-a1.1.2.md
 ```
