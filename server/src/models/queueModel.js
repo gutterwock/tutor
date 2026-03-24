@@ -269,6 +269,22 @@ async function regressSubtopicItems(userId, subtopicId) {
 	);
 }
 
+/**
+ * Bump existing tier-3 items for a course by 20, capped at 399.
+ * excludeSubtopicIds: subtopics just unlocked (their items were just placed into tier 3).
+ */
+async function bumpCourseTier3(userId, courseId, excludeSubtopicIds) {
+	if (!excludeSubtopicIds.length) return;
+	await pool.query(
+		`UPDATE study_queue
+		 SET priority = LEAST(priority + 20, 399)
+		 WHERE user_id = $1 AND course_id = $2
+		   AND subtopic_id != ANY($3)
+		   AND priority BETWEEN 300 AND 399`,
+		[userId, courseId, excludeSubtopicIds]
+	);
+}
+
 /** Clear all queue items for a course (used on unenroll). */
 async function clearCourseItems(userId, courseId) {
 	await pool.query(
@@ -308,7 +324,7 @@ async function getSubtopicScore(userId, subtopicId, window = 10) {
 
 module.exports = {
 	tieredFetch, queueSize,
-	insertLocked, promoteSubtopicItems,
+	insertLocked, promoteSubtopicItems, bumpCourseTier3,
 	consumeContent, transitionQuestionTier, regressSubtopicItems,
 	clearCourseItems, getSubtopicScore,
 	tierOf, randInTier, nextPriority,

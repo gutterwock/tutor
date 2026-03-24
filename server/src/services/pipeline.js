@@ -130,6 +130,10 @@ async function unlockNextForCourse(userId, courseId) {
 		}
 	}
 
+	if (unlocked.length > 0) {
+		await queueModel.bumpCourseTier3(userId, courseId, unlocked);
+	}
+
 	return unlocked;
 }
 

@@ -143,7 +143,7 @@ async function gradeResponseAI(req, res) {
 		}
 
 		const qRes = await pool.query(
-			`SELECT r.id, r.user_answer,
+			`SELECT r.id, r.question_id, r.user_answer,
 			        q.question_text, q.answer, q.question_type
 			 FROM response r
 			 JOIN question q ON q.id = r.question_id

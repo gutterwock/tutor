@@ -483,8 +483,12 @@ async function askQuestion(data) {
 		userAnswer = parts.map((k) => keyToOriginal[k]);
 		const expected = (Array.isArray(data.answer) ? data.answer : []).map((k) => String(k).toLowerCase());
 		correctness = JSON.stringify(userAnswer) === JSON.stringify(expected) ? 4 : 0;
+		const originalToDisplay = Object.fromEntries(Object.entries(keyToOriginal).map(([d, o]) => [o, d]));
 		const correctOrder = (Array.isArray(data.answer) ? data.answer : [])
-			.map((k) => data.options?.[k] ? `${k}) ${data.options[k]}` : k).join(" → ");
+			.map((k) => {
+				const dk = originalToDisplay[String(k).toLowerCase()];
+				return dk ? `${dk}) ${shuffledOptions[dk]}` : k;
+			}).join(" → ");
 		if (correctness === 4) {
 			console.log("\n  ✓ Correct!");
 		} else {
