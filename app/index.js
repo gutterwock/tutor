@@ -67,9 +67,11 @@ const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
  */
 function shuffleOptions(options) {
 	const keys = Object.keys(options);
-	if (keys.length <= 1) {
-		return { shuffledOptions: options, keyToOriginal: Object.fromEntries(keys.map((k) => [k.toLowerCase(), k.toLowerCase()])) };
-	}
+	const identity = { shuffledOptions: options, keyToOriginal: Object.fromEntries(keys.map((k) => [k.toLowerCase(), k.toLowerCase()])) };
+	if (keys.length <= 1) return identity;
+	// Skip shuffle if any option references other options by letter (e.g. "Both A and B", "All of the above")
+	const metaPattern = /\ball\s+of\s+the\s+above\b|\bnone\s+of\s+the\s+above\b|\bboth\b|\b[a-d]\s+and\s+[a-d]\b/i;
+	if (Object.values(options).some((v) => metaPattern.test(String(v)))) return identity;
 	// Fisher-Yates on index array
 	const indices = keys.map((_, i) => i);
 	for (let i = indices.length - 1; i > 0; i--) {
@@ -404,6 +406,7 @@ async function askQuestion(data) {
 
 	if (data.question_type === "singleChoice") {
 		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
+		const originalToDisplay = Object.fromEntries(Object.entries(keyToOriginal).map(([d, o]) => [o, d]));
 		console.log(formatOptions(shuffledOptions) + "\n");
 		let input;
 		while (true) {
@@ -417,13 +420,16 @@ async function askQuestion(data) {
 		if (isCorrect) {
 			console.log("\n  ✓ Correct!");
 		} else {
-			const correctText = data.options?.[data.answer] ? `${data.answer}) ${data.options[data.answer]}` : data.answer;
+			const correctKey = String(data.answer).toLowerCase();
+			const displayKey = originalToDisplay[correctKey] ?? correctKey;
+			const correctText = shuffledOptions[displayKey] ? `${displayKey}) ${shuffledOptions[displayKey]}` : correctKey;
 			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
 		}
 		if (data.explanation) console.log(`\n  ${data.explanation}`);
 
 	} else if (data.question_type === "multiChoice") {
 		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
+		const originalToDisplay = Object.fromEntries(Object.entries(keyToOriginal).map(([d, o]) => [o, d]));
 		console.log(formatOptions(shuffledOptions) + "\n");
 		let parts;
 		while (true) {
@@ -439,7 +445,10 @@ async function askQuestion(data) {
 		if (isCorrect) {
 			console.log("\n  ✓ Correct!");
 		} else {
-			const correctText = expected.map((k) => data.options?.[k] ? `${k}) ${data.options[k]}` : k).join(", ");
+			const correctText = expected.map((k) => {
+				const displayKey = originalToDisplay[k] ?? k;
+				return shuffledOptions[displayKey] ? `${displayKey}) ${shuffledOptions[displayKey]}` : k;
+			}).join(", ");
 			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
 		}
 		if (data.explanation) console.log(`\n  ${data.explanation}`);

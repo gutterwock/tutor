@@ -149,3 +149,4 @@ CREATE TABLE study_queue (
 
 CREATE UNIQUE INDEX idx_study_queue_dedup    ON study_queue (user_id, item_type, item_id);
 CREATE        INDEX idx_study_queue_priority ON study_queue (user_id, priority DESC);
+CREATE        INDEX idx_study_queue_course   ON study_queue (user_id, course_id);
