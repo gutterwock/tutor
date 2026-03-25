@@ -38,7 +38,9 @@ router.get("/enrollments", progressController.getEnrollments);
 router.get("/struggling", progressController.getStruggling);
 router.post("/generate-adaptive", progressController.generateAdaptive);
 
+router.get("/queue/tier-counts", queueController.getQueueTierCounts);
 router.get("/queue",        queueController.getQueue);
+router.patch("/queue/:id",  queueController.patchQueueItem);
 router.delete("/queue",     queueController.clearCourseQueue);
 router.delete("/queue/:id", queueController.deleteQueueItem);
 

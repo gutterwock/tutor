@@ -61,6 +61,34 @@ async function tieredFetch(userId, courseIds, limitPerTier = 10, questionOnly = 
 	return result.rows;
 }
 
+/**
+ * Count items per tier for a user+course.
+ * Returns { locked, tier0, tier1, tier2, tier3, tier4 }.
+ */
+async function getTierCounts(userId, courseId) {
+	const result = await pool.query(
+		`SELECT
+		   COUNT(*) FILTER (WHERE priority < 0)                 AS locked,
+		   COUNT(*) FILTER (WHERE priority BETWEEN   0 AND  99) AS tier0,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 100 AND 199) AS tier1,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 200 AND 299) AS tier2,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 300 AND 399) AS tier3,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 400 AND 499) AS tier4
+		 FROM study_queue
+		 WHERE user_id = $1 AND course_id = $2`,
+		[userId, courseId]
+	);
+	const r = result.rows[0];
+	return {
+		locked: parseInt(r.locked, 10),
+		tier0:  parseInt(r.tier0,  10),
+		tier1:  parseInt(r.tier1,  10),
+		tier2:  parseInt(r.tier2,  10),
+		tier3:  parseInt(r.tier3,  10),
+		tier4:  parseInt(r.tier4,  10),
+	};
+}
+
 /** Count unlocked items (priority >= 0) for a user. */
 async function queueSize(userId) {
 	const result = await pool.query(
@@ -322,8 +350,16 @@ async function getSubtopicScore(userId, subtopicId, window = 10) {
 	};
 }
 
+/** Directly set the priority of a queue item (admin/script use). */
+async function setItemPriority(queueId, priority) {
+	await pool.query(
+		`UPDATE study_queue SET priority = $1 WHERE id = $2`,
+		[priority, queueId]
+	);
+}
+
 module.exports = {
-	tieredFetch, queueSize,
+	tieredFetch, queueSize, getTierCounts, setItemPriority,
 	insertLocked, promoteSubtopicItems, bumpCourseTier3,
 	consumeContent, transitionQuestionTier, regressSubtopicItems,
 	clearCourseItems, getSubtopicScore,

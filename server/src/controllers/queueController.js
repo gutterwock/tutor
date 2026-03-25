@@ -163,4 +163,42 @@ async function clearCourseQueue(req, res) {
 	return res.json({ ok: true });
 }
 
-module.exports = { getQueue, deleteQueueItem, clearCourseQueue };
+/**
+ * PATCH /queue/:id
+ * Body: { priority: number }
+ * Directly set the priority of a queue item. Used by admin scripts.
+ */
+async function patchQueueItem(req, res) {
+	try {
+		const { id } = req.params;
+		const { priority } = req.body;
+		if (priority === undefined || typeof priority !== "number" || !Number.isInteger(priority)) {
+			return res.status(400).json({ error: "Body must include priority as an integer" });
+		}
+		await queueModel.setItemPriority(id, priority);
+		return res.json({ ok: true });
+	} catch (err) {
+		console.error("patchQueueItem error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+/**
+ * GET /queue/tier-counts?user_id=&course_id=
+ * Returns item counts per tier for a user+course.
+ */
+async function getQueueTierCounts(req, res) {
+	try {
+		const { user_id, course_id } = req.query;
+		if (!user_id || !course_id) {
+			return res.status(400).json({ error: "Missing required query params: user_id, course_id" });
+		}
+		const counts = await queueModel.getTierCounts(user_id, course_id);
+		return res.json(counts);
+	} catch (err) {
+		console.error("getQueueTierCounts error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+module.exports = { getQueue, deleteQueueItem, clearCourseQueue, getQueueTierCounts, patchQueueItem };
