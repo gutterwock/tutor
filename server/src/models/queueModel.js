@@ -290,9 +290,9 @@ async function transitionQuestionTier(userId, questionId, correctness) {
 async function regressSubtopicItems(userId, subtopicId) {
 	await pool.query(
 		`UPDATE study_queue
-		 SET priority = 300 + floor(random() * 100)::int
+		 SET priority = 250 + floor(random() * 50)::int
 		 WHERE user_id = $1 AND subtopic_id = $2
-		   AND priority BETWEEN 0 AND 399`,
+		   AND priority BETWEEN 0 AND 299`,
 		[userId, subtopicId]
 	);
 }
