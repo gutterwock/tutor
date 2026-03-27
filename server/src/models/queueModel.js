@@ -1,5 +1,7 @@
 const pool = require("../config/db");
 
+const FREETEXT_PASS_THRESHOLD = parseInt(process.env.FREETEXT_PASS_THRESHOLD || "3", 10);
+
 // ── Tier helpers ───────────────────────────────────────────────────────────────
 
 const TIER_RANGES = [
@@ -284,7 +286,8 @@ async function transitionQuestionTier(userId, questionId, correctness) {
 }
 
 /**
- * Push all non-locked, non-tier4 items for a subtopic back to tier 3.
+ * Push items outside the 250–299 band (tiers 0–1 and lower tier 2) for a subtopic into that band.
+ * Items already in 250–299 are left untouched. Locked (-1) and tier-4 (400+) items are unaffected.
  * Used when regression is detected on a completed subtopic.
  */
 async function regressSubtopicItems(userId, subtopicId) {
@@ -292,7 +295,7 @@ async function regressSubtopicItems(userId, subtopicId) {
 		`UPDATE study_queue
 		 SET priority = 250 + floor(random() * 50)::int
 		 WHERE user_id = $1 AND subtopic_id = $2
-		   AND priority BETWEEN 0 AND 299`,
+		   AND priority BETWEEN 0 AND 249`,
 		[userId, subtopicId]
 	);
 }

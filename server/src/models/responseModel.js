@@ -1,5 +1,24 @@
 const pool = require("../config/db");
 
+const RESPONSE_RETENTION = 5;
+
+/**
+ * Delete responses for (user, question) beyond the most recent RESPONSE_RETENTION rows.
+ */
+async function pruneResponses(questionId, userId) {
+	await pool.query(
+		`DELETE FROM response
+		 WHERE user_id = $1 AND question_id = $2
+		   AND id NOT IN (
+		     SELECT id FROM response
+		     WHERE user_id = $1 AND question_id = $2
+		     ORDER BY responded_at DESC
+		     LIMIT $3
+		   )`,
+		[userId, questionId, RESPONSE_RETENTION]
+	);
+}
+
 /**
  * Insert a graded response (graded_at = responded_at so cron skips it).
  */
@@ -11,6 +30,7 @@ async function submitResponse(questionId, userId, userAnswer, correctness) {
 		 RETURNING *`,
 		[questionId, userId, JSON.stringify(userAnswer), correctness, now]
 	);
+	await pruneResponses(questionId, userId);
 	return result.rows[0];
 }
 
@@ -26,6 +46,7 @@ async function submitUngraded(questionId, userId, userAnswer) {
 		 RETURNING *`,
 		[questionId, userId, JSON.stringify(userAnswer), now]
 	);
+	await pruneResponses(questionId, userId);
 	return result.rows[0];
 }
 

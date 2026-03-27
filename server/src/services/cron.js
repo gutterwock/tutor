@@ -101,8 +101,8 @@ async function runForUser(userId) {
 		if (unlocked.length > 0) console.log(`  [cron] unlocked ${unlocked} for user ${userId.slice(0, 8)}`);
 	}
 
-	// 3. Regression detection — skip subtopics completed this tick to avoid same-tick flip
-	await reactivateRegressions(userId, justCompleted);
+	// 3. Regression detection — disabled for now
+	// await reactivateRegressions(userId, justCompleted);
 }
 
 // ── Cron runner ───────────────────────────────────────────────────────────────

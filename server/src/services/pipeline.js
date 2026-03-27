@@ -41,16 +41,26 @@ async function isSubtopicComplete(userId, subtopicId) {
 	if (parseInt(viewed, 10) < parseInt(total, 10)) return false;
 
 	const scoreRes = await pool.query(
-		`SELECT COUNT(r.id) AS response_count,
-		        AVG(r.correctness)::float AS avg_correctness
-		 FROM response r
-		 JOIN question q ON q.id = r.question_id
-		 WHERE r.user_id = $1 AND q.syllabus_id = $2 AND q.active = true
-		   AND NOT (q.question_type IN ('freeText', 'ordering') AND r.graded_at IS NULL)`,
+		`SELECT COUNT(*)::int AS response_count,
+		        AVG(correctness)::float AS avg_correctness
+		 FROM (
+		   SELECT correctness, responded_at
+		   FROM (
+		     SELECT DISTINCT ON (r.question_id)
+		            r.correctness, r.responded_at
+		     FROM response r
+		     JOIN question q ON q.id = r.question_id
+		     WHERE r.user_id = $1 AND q.syllabus_id = $2 AND q.active = true
+		       AND NOT (q.question_type IN ('freeText', 'ordering') AND r.graded_at IS NULL)
+		     ORDER BY r.question_id, r.responded_at DESC
+		   ) latest_per_question
+		   ORDER BY responded_at DESC
+		   LIMIT 2
+		 ) last2`,
 		[userId, subtopicId]
 	);
 	const row = scoreRes.rows[0];
-	if (!row || parseInt(row.response_count, 10) === 0) return false;
+	if (!row || row.response_count < 2) return false;
 	return row.avg_correctness >= COMPLETION_THRESHOLD;
 }
 
