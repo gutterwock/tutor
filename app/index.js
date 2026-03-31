@@ -4,6 +4,7 @@ const readline = require("readline");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const math = require("mathjs");
 
 const API = process.env.API_URL || "http://localhost:3000";
 const ID_FILE = path.join(__dirname, ".user_id");
@@ -12,7 +13,8 @@ const SETTINGS_FILE = path.join(__dirname, ".settings.json");
 const DEFAULT_SETTINGS = {
 	disabled_courses: [],       // course IDs temporarily excluded from course picker
 	session_size: 10,           // items per session (min 5); also used as limit per tier in fetch
-	review_pct: 30,             // % of session drawn from review tiers (0/1/2/4); rest from tier 3 (new)
+	review_pct: 30,             // % of session drawn from review tiers (0/1/2); rest from tier 3 (new)
+	tier4_as_review: false,     // treat tier 4 (failed) items as review rather than new
 	last_selected_courses: [],  // last course IDs chosen at session start; used as default
 };
 
@@ -61,6 +63,28 @@ const hr = () => console.log("\n" + "─".repeat(60));
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 /**
+ * Convert LaTeX notation to ASCII math representation.
+ * Uses mathjs to parse and format expressions in ASCII-friendly notation.
+ */
+function convertLatexToAsciiMath(text) {
+	if (!text) return text;
+
+	// Replace $$...$$ and $...$ delimiters with spaces for processing
+	return text.replace(/\$\$([^$]+)\$\$|\$([^$]+)\$/g, (match, display, inline) => {
+		const latexExpr = display || inline;
+		try {
+			// Try to parse and format with mathjs
+			const parsed = math.parse(latexExpr);
+			const ascii = parsed.toString();
+			return ` [${ascii}] `;
+		} catch (e) {
+			// If parsing fails, return original with basic cleanup
+			return ` [${latexExpr.replace(/\\/g, '')}] `;
+		}
+	});
+}
+
+/**
  * Shuffle the values across option keys, keeping the displayed letters (a/b/c/d) the same.
  * Returns shuffledOptions (same keys, values reassigned) and keyToOriginal (display key → original key).
  * When the user picks display key "a", keyToOriginal["a"] gives the real answer key to submit.
@@ -99,13 +123,13 @@ function progressBar(completed, total, width = 20) {
 
 /**
  * Given the flat tiered fetch result, compose a session of `sessionSize` items.
- * reviewPct (0–100) controls what fraction comes from review tiers (0/1/2/4).
+ * reviewPct (0–100) controls what fraction comes from review tiers (0/1/2 and optionally 4).
  * Tier 3 = new items. If one bucket is short, the other fills the remainder.
  * Final order: randomly interleaved across tiers, priority DESC preserved within each tier.
  */
-function composeSession(items, sessionSize, reviewPct) {
-	const newItems    = items.filter((i) => i.priority >= 300).sort((a, b) => b.priority - a.priority);
-	const reviewItems = items.filter((i) => i.priority >= 0 && i.priority < 300).sort((a, b) => b.priority - a.priority);
+function composeSession(items, sessionSize, reviewPct, tier4AsReview = false) {
+	const newItems    = items.filter((i) => tier4AsReview ? (i.priority >= 300 && i.priority < 400) : i.priority >= 300).sort((a, b) => b.priority - a.priority);
+	const reviewItems = items.filter((i) => i.priority >= 0 && (i.priority < 300 || (tier4AsReview && i.priority >= 400))).sort((a, b) => b.priority - a.priority);
 
 	const targetNew    = Math.max(0, Math.floor(sessionSize * (1 - reviewPct / 100)));
 	const targetReview = sessionSize - targetNew;
@@ -149,8 +173,9 @@ async function settingsMenu(settings) {
 	while (true) {
 		clear();
 		console.log("Settings\n");
-		console.log(`  1.  Session size   [${settings.session_size} items]  — items shown per session (min 5)`);
-		console.log(`  2.  Review %       [${settings.review_pct}%]  — portion of session from review tiers (0=all new, 100=all review)`);
+		console.log(`  1.  Session size      [${settings.session_size} items]  — items shown per session (min 5)`);
+		console.log(`  2.  Review %          [${settings.review_pct}%]  — portion of session from review tiers (0=all new, 100=all review)`);
+		console.log(`  3.  Tier 4 as review  [${settings.tier4_as_review ? "on" : "off"}]  — treat failed items as review rather than new`);
 		console.log("\n  b.  Back");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
@@ -174,6 +199,9 @@ async function settingsMenu(settings) {
 				console.log("  Invalid — enter 0–100.");
 				await pause();
 			}
+		} else if (input === "3") {
+			settings.tier4_as_review = !settings.tier4_as_review;
+			saveSettings(settings);
 		} else if (input === "b" || input === "") {
 			return;
 		}
@@ -373,14 +401,14 @@ async function pickCourses(userId, settings) {
 
 function formatOptions(options) {
 	if (!options || typeof options !== "object") return "";
-	return Object.entries(options).map(([k, v]) => `  ${k})  ${v}`).join("\n");
+	return Object.entries(options).map(([k, v]) => `  ${k})  ${convertLatexToAsciiMath(v)}`).join("\n");
 }
 
 /** Display a content item. Returns after the user presses Enter. */
 async function showContent(data) {
 	console.log(`\n\n\n  ${data.title}\n`);
 	hr();
-	console.log(data.body);
+	console.log(convertLatexToAsciiMath(data.body));
 	if (Array.isArray(data.links) && data.links.length) {
 		console.log("\n  Links:");
 		data.links.forEach((l) => console.log(`    ${typeof l === "string" ? l : l.url ?? JSON.stringify(l)}`));
@@ -394,10 +422,10 @@ async function showContent(data) {
 async function askQuestion(data) {
 	if (data.passage) {
 		console.log('\n--- Context ---');
-		console.log(data.passage);
+		console.log(convertLatexToAsciiMath(data.passage));
 		console.log('---------------');
 	}
-	console.log(`\n\n\n${data.question_text}\n`);
+	console.log(`\n\n\n${convertLatexToAsciiMath(data.question_text)}\n`);
 
 	let userAnswer;
 	let correctness = 0;
@@ -425,7 +453,7 @@ async function askQuestion(data) {
 			const correctText = shuffledOptions[displayKey] ? `${displayKey}) ${shuffledOptions[displayKey]}` : correctKey;
 			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
 		}
-		if (data.explanation) console.log(`\n  ${data.explanation}`);
+		if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
 
 	} else if (data.question_type === "multiChoice") {
 		const { shuffledOptions, keyToOriginal } = shuffleOptions(data.options);
@@ -451,7 +479,7 @@ async function askQuestion(data) {
 			}).join(", ");
 			console.log(`\n  ✗ Incorrect — answer: ${correctText}`);
 		}
-		if (data.explanation) console.log(`\n  ${data.explanation}`);
+		if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
 
 	} else if (data.question_type === "exactMatch") {
 		let input;
@@ -473,7 +501,7 @@ async function askQuestion(data) {
 		if (isCorrect) {
 			correctness = 4;
 			console.log("\n  ✓ Correct!");
-			if (data.explanation) console.log(`\n  ${data.explanation}`);
+			if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
 		} else {
 			// Deterministic match failed — fall back to AI to check for equivalent answers
 			return { correctness: 0, userAnswer, needsAiGrading: true };
@@ -503,7 +531,7 @@ async function askQuestion(data) {
 		} else {
 			console.log(`\n  ✗ Incorrect — correct order: ${correctOrder}`);
 		}
-		if (data.explanation) console.log(`\n  ${data.explanation}`);
+		if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
 
 	} else {
 		// freeText
@@ -544,7 +572,8 @@ async function studySession(userId, settings, questionOnly = false) {
 		return;
 	}
 
-	const items = composeSession(rawItems, sessionSize, reviewPct);
+	const tier4AsReview = settings.tier4_as_review ?? false;
+	const items = composeSession(rawItems, sessionSize, reviewPct, tier4AsReview);
 
 	if (!items.length) {
 		console.log("\nYour queue is empty — nothing due right now.\n");
@@ -552,7 +581,7 @@ async function studySession(userId, settings, questionOnly = false) {
 		return;
 	}
 
-	const hasReview = items.some((i) => i.priority >= 0 && i.priority < 300);
+	const hasReview = items.some((i) => i.priority >= 0 && (i.priority < 300 || (tier4AsReview && i.priority >= 400)));
 	console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
 	await pause();
 
@@ -588,9 +617,9 @@ async function studySession(userId, settings, questionOnly = false) {
 					if (data.answer) {
 						const answerLabel = data.question_type === "exactMatch" ? "Accepted" : "Example answer";
 						const answerText = Array.isArray(data.answer) ? data.answer.join(" / ") : data.answer;
-						console.log(`\n  ${answerLabel}: ${answerText}`);
+						console.log(`\n  ${answerLabel}: ${convertLatexToAsciiMath(answerText)}`);
 					}
-					if (data.explanation) console.log(`\n  ${data.explanation}`);
+					if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
 					correctness = graded.correctness;
 				} else {
 					console.log("  (Grading failed — marked as incorrect.)");
@@ -646,7 +675,7 @@ async function main() {
 
 	while (true) {
 		clear();
-		console.log(`tutor  (user: ${userId.slice(0, 8)}…)\n`);
+		console.log(`tutor  (user: ${userId})\n`);
 		console.log("  1.  Study  ← Enter");
 		console.log("  2.  Quiz");
 		console.log("  3.  Manage courses");

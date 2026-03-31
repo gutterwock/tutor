@@ -33,6 +33,8 @@ class CourseValidator {
     this.checkStructure();
     this.checkQuestions();
     this.checkTags();
+    const headerErrors = this.checkContentHeaders();
+    this.errors.push(...headerErrors);
     return { errors: this.errors, warnings: this.warnings };
   }
 
@@ -181,6 +183,24 @@ class CourseValidator {
         seen.set(key, idx);
       }
     });
+  }
+
+  checkContentHeaders() {
+    // Check for improperly formatted content section headers
+    // Must be: ## [phase:atomic] Title or ## [phase:complex] Title or ## [phase:integration] Title
+    const badHeaders = [];
+    for (let i = 0; i < this.lines.length; i++) {
+      const line = this.lines[i];
+      const lineNum = i + 1;
+      // Check for ## phase:X pattern (missing brackets)
+      if (/^## phase:(atomic|complex|integration)\s+/.test(line)) {
+        badHeaders.push(
+          `Line ${lineNum}: Content header missing brackets: "${line.trim()}"\n` +
+          `           Should be: "${line.replace(/^## (phase:\w+)/, '## [$1]').trim()}"`
+        );
+      }
+    }
+    return badHeaders;
   }
 }
 

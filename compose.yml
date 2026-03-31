@@ -28,44 +28,37 @@ services:
       db:
         condition: service_healthy
 
-  ui:
-    build: ./ui
-    ports:
-      - "5173:80"
-    depends_on:
-      - server
+#  redis:
+#    image: redis:7-alpine
+#    volumes:
+#      - voice-redis-data:/data
+#    command: redis-server --save 60 1 --loglevel warning
+#    healthcheck:
+#      test: ["CMD", "redis-cli", "ping"]
+#      interval: 5s
+#      timeout: 3s
+#      retries: 10
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - voice-redis-data:/data
-    command: redis-server --save 60 1 --loglevel warning
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  voice:
-    build: ./voice
-    ports:
-      - "3001:3001"
-    environment:
-      PORT: 3001
-      REDIS_URL: redis://redis:6379
-      STT_WORKERS: 2
-      TTS_WORKERS: 2
-      TTS_TIMEOUT_MS: 120000
-      STT_TIMEOUT_MS: 60000
-      JOB_TTL_SECONDS: 3600
-    volumes:
-      - voice-tts-models:/root/.local/share/tts
-    depends_on:
-      redis:
-        condition: service_healthy
+#  voice:
+#    build: ./voice
+#    ports:
+#      - "3001:3001"
+#    environment:
+#      PORT: 3001
+#      REDIS_URL: redis://redis:6379
+#      STT_WORKERS: 2
+#      TTS_WORKERS: 2
+#      TTS_TIMEOUT_MS: 120000
+#      STT_TIMEOUT_MS: 60000
+#      JOB_TTL_SECONDS: 3600
+#    volumes:
+#      - voice-tts-models:/root/.local/share/tts
+#    depends_on:
+#      redis:
+#        condition: service_healthy
 
 volumes:
   tutor-db-data:
     external: true
-  voice-redis-data:
-  voice-tts-models:
+ # voice-redis-data:
+ # voice-tts-models:

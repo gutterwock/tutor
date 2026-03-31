@@ -71,9 +71,12 @@ node scripts/ingest.js --dry-run                    # preview without hitting se
 node scripts/ingest.js --base-url http://host:3000 <ref>
 node scripts/ingest.js --convert-only               # parse markdown → JSON files in courseData/{ref}/converted/
 node scripts/ingest.js --data-dir /path/to/data     # override courseData/ location (default: ./courseData)
+node scripts/ingest.js --allow-unreviewed           # skip the default check; ingest courses with unreviewed subtopics
 ```
 
 Parses and uploads `courseData/` files (markdown or legacy JSON) to the running API server: syllabus first, then content and questions per subtopic. Supports both direct (`courseData/{course-id}/`) and nested (`courseData/{group}/{course-id}/`) layouts. Embeddings are generated server-side if `ENABLE_EMBEDDINGS=true` is set on the server; otherwise the `embedding` column is stored as NULL.
+
+**Review status:** By default, the ingest script skips any course with unreviewed subtopics. Subtopic files are considered reviewed if they have a `reviewed: YYYY-MM-DD` line at the top. Use `--allow-unreviewed` to override this check and ingest courses regardless of review status.
 
 ### Tests
 

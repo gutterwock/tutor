@@ -11,10 +11,11 @@
  *   node scripts/ingest.js aws-security-specialty japanese-phonetics
  *
  * Options:
- *   --base-url <url>   API server base URL (default: http://localhost:3000)
- *   --data-dir <path>  Path to courseData directory (default: ../courseData relative to script)
- *   --dry-run          Print what would be uploaded without making requests
- *   --convert-only     Parse markdown and write JSON to courseData/{id}/converted/ (no upload)
+ *   --base-url <url>       API server base URL (default: http://localhost:3000)
+ *   --data-dir <path>      Path to courseData directory (default: ../courseData relative to script)
+ *   --dry-run              Print what would be uploaded without making requests
+ *   --convert-only         Parse markdown and write JSON to courseData/{id}/converted/ (no upload)
+ *   --allow-unreviewed     Skip the default check; allow ingest of courses with unreviewed subtopics
  */
 
 const fs = require("fs");
@@ -31,6 +32,7 @@ const courseArgs = [];
 let baseUrl = "http://localhost:3000";
 let dryRun = false;
 let convertOnly = false;
+let allowUnreviewed = false;
 let _courseDataDir = path.resolve(__dirname, "../courseData");
 
 for (let i = 0; i < args.length; i++) {
@@ -42,6 +44,8 @@ for (let i = 0; i < args.length; i++) {
 		dryRun = true;
 	} else if (args[i] === "--convert-only") {
 		convertOnly = true;
+	} else if (args[i] === "--allow-unreviewed") {
+		allowUnreviewed = true;
 	} else {
 		courseArgs.push(args[i]);
 	}
@@ -114,6 +118,29 @@ function collectSubtopicIds(course) {
 		}
 	}
 	return ids;
+}
+
+/** Check if a subtopic markdown file has been reviewed (has reviewed: line at top). */
+function isSubtopicReviewed(filePath) {
+	if (!fs.existsSync(filePath)) return false;
+	const content = fs.readFileSync(filePath, "utf8");
+	const firstLine = content.split("\n")[0] || "";
+	return /^reviewed:\s+\d{4}-\d{2}-\d{2}/.test(firstLine);
+}
+
+/** Check if all subtopics in a course have been reviewed. */
+function courseHasUnreviewedSubtopics(courseDir, format, syllabus) {
+	const subtopicIds = collectSubtopicIds(syllabus);
+	for (const subtopicId of subtopicIds) {
+		if (format === "md") {
+			const mdFile = path.join(courseDir, `${subtopicId}.md`);
+			if (fs.existsSync(mdFile) && !isSubtopicReviewed(mdFile)) {
+				return true;
+			}
+		}
+		// For JSON format, we don't check review status (legacy format)
+	}
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -800,6 +827,13 @@ async function ingestCourse(courseDir, displayName) {
 	const { syllabus, format } = loaded;
 
 	log(`  format: ${format}`);
+
+	// Check for unreviewed subtopics if not allowing them
+	if (!allowUnreviewed && courseHasUnreviewedSubtopics(courseDir, format, syllabus)) {
+		warn(`${displayName} has unreviewed subtopics — skipping (use --allow-unreviewed to force)`);
+		return;
+	}
+
 	await uploadSyllabus(syllabus, displayName);
 
 	const subtopicIds = collectSubtopicIds(syllabus);

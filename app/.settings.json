@@ -1,6 +1,9 @@
 {
   "disabled_courses": [],
-  "session_size": 10,
-  "review_pct": 30,
-  "last_selected_courses": []
+  "session_size": 20,
+  "review_pct": 20,
+  "tier4_as_review": true,
+  "last_selected_courses": [
+    "language-of-comics"
+  ]
 }
