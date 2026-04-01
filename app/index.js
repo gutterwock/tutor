@@ -239,12 +239,16 @@ async function enrollFlow(userId) {
 async function showCourseProgress(userId, course, settings) {
 	while (true) {
 		clear();
-		const progress = await api(
-			"GET",
-			`/course-progress?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`
-		);
+		const [progress, tiers] = await Promise.all([
+			api("GET", `/course-progress?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`),
+			api("GET", `/queue/tier-counts?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`).catch(() => null),
+		]);
 
-		console.log(`\n  ${course.name}  (${progress.completed} / ${progress.total})\n`);
+		const total = tiers ? (tiers.locked + tiers.tier0 + tiers.tier1 + tiers.tier2 + tiers.tier3 + tiers.tier4) : 0;
+		const mastered = tiers ? (tiers.tier0 + tiers.tier1 + tiers.tier2) : 0;
+
+		console.log(`\n  ${course.name}  (${progress.completed} / ${progress.total} subtopics)`);
+		if (tiers) console.log(`  Items in tiers 0/1/2: ${mastered} / ${total}`);
 		hr();
 
 		for (const topic of progress.topics) {
