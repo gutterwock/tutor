@@ -361,10 +361,72 @@ async function setItemPriority(queueId, priority) {
 	);
 }
 
+/**
+ * Set all items in a subtopic (and optionally filtered by item_type) to a target tier.
+ * targetTier: 0–4, -1 (locked). Priority within tier is randomized.
+ * itemType: optional 'content' or 'question'; if omitted, all types included.
+ * Returns count of affected rows.
+ */
+async function setSubtopicItemsTier(userId, subtopicId, targetTier, itemType = null) {
+	let priority;
+	if (targetTier === -1) {
+		priority = -1;
+	} else {
+		const min = targetTier * 100;
+		const max = min + 99;
+		priority = min + Math.floor(Math.random() * 100);
+	}
+
+	const typeFilter = itemType ? `AND item_type = $4` : "";
+	const params = [userId, subtopicId, priority];
+	if (itemType) params.push(itemType);
+
+	const result = await pool.query(
+		`UPDATE study_queue
+		 SET priority = $3
+		 WHERE user_id = $1 AND subtopic_id = $2 ${typeFilter}`,
+		params
+	);
+	return result.rowCount;
+}
+
+/**
+ * Set all items in a topic (all subtopics under it) to a target tier for a user.
+ * targetTier: 0–4, -1 (locked). Priority within tier is randomized.
+ * itemType: optional 'content' or 'question'; if omitted, all types included.
+ * Returns count of affected rows.
+ */
+async function setTopicItemsTier(userId, topicId, targetTier, itemType = null) {
+	let priority;
+	if (targetTier === -1) {
+		priority = -1;
+	} else {
+		const min = targetTier * 100;
+		const max = min + 99;
+		priority = min + Math.floor(Math.random() * 100);
+	}
+
+	const typeFilter = itemType ? `AND sq.item_type = $4` : "";
+	const params = [userId, topicId, priority];
+	if (itemType) params.push(itemType);
+
+	const result = await pool.query(
+		`UPDATE study_queue sq
+		 SET priority = $3
+		 WHERE sq.user_id = $1
+		   AND sq.subtopic_id IN (
+		     SELECT id FROM syllabus WHERE parent_id = $2
+		   ) ${typeFilter}`,
+		params
+	);
+	return result.rowCount;
+}
+
 module.exports = {
 	tieredFetch, queueSize, getTierCounts, setItemPriority,
 	insertLocked, promoteSubtopicItems, bumpCourseTier3,
 	consumeContent, transitionQuestionTier, regressSubtopicItems,
 	clearCourseItems, getSubtopicScore,
+	setSubtopicItemsTier, setTopicItemsTier,
 	tierOf, randInTier, nextPriority,
 };

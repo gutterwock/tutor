@@ -201,4 +201,49 @@ async function getQueueTierCounts(req, res) {
 	}
 }
 
-module.exports = { getQueue, deleteQueueItem, clearCourseQueue, getQueueTierCounts, patchQueueItem };
+/**
+ * POST /queue/set-tier
+ * Body: {
+ *   user_id: string,
+ *   subtopic_id: string (OR topic_id: string),
+ *   target_tier: number (0–4, or -1 for locked),
+ *   item_type: string? ('content', 'question', or omitted for both)
+ * }
+ * Sets all items in the given subtopic/topic to the target tier.
+ * Returns { affected: number }.
+ */
+async function setItemsTier(req, res) {
+	try {
+		const { user_id, subtopic_id, topic_id, target_tier, item_type } = req.body;
+
+		if (!user_id) {
+			return res.status(400).json({ error: "Missing required field: user_id" });
+		}
+		if (!subtopic_id && !topic_id) {
+			return res.status(400).json({ error: "Missing required field: subtopic_id or topic_id" });
+		}
+		if (target_tier === undefined || typeof target_tier !== "number" || !Number.isInteger(target_tier)) {
+			return res.status(400).json({ error: "Missing or invalid field: target_tier (must be integer)" });
+		}
+		if (target_tier < -1 || target_tier > 4) {
+			return res.status(400).json({ error: "target_tier must be in range -1 to 4" });
+		}
+		if (item_type && !["content", "question"].includes(item_type)) {
+			return res.status(400).json({ error: "item_type must be 'content', 'question', or omitted" });
+		}
+
+		let affected;
+		if (subtopic_id) {
+			affected = await queueModel.setSubtopicItemsTier(user_id, subtopic_id, target_tier, item_type);
+		} else {
+			affected = await queueModel.setTopicItemsTier(user_id, topic_id, target_tier, item_type);
+		}
+
+		return res.json({ affected });
+	} catch (err) {
+		console.error("setItemsTier error:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	}
+}
+
+module.exports = { getQueue, deleteQueueItem, clearCourseQueue, getQueueTierCounts, patchQueueItem, setItemsTier };

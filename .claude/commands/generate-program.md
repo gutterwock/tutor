@@ -8,7 +8,9 @@ description: Generate a multi-course learning program outline
 
 You are generating a learning program document. The user has provided: $ARGUMENTS
 
-Extract: **goal** (what to achieve), **prior knowledge** (default: "none assumed"), **constraints** (scope/time/focus limits). Ask one clarifying question if the goal is too vague.
+1. **Ask for program name:** Prompt the user for the program name (will become `program-NAME` folder). If not provided in $ARGUMENTS, ask directly. Convert to lowercase hyphenated slug for the program-id.
+
+2. **Extract program details:** Get **goal** (what to achieve), **prior knowledge** (default: "none assumed"), **constraints** (scope/time/focus limits). Ask one clarifying question if the goal is too vague.
 
 ---
 
@@ -54,9 +56,10 @@ Write to `courseData/{program-id}/program.md` (lowercase hyphenated slug). The p
 
 ### Interaction Flow
 
-1. Parse input; clarify if ambiguous
-2. Check if `courseData/{program-id}/program.md` exists; ask if found
-3. Generate and write the document to `courseData/{program-id}/program.md`
-4. Show summary: program ID, stage counts, ordered list, any flags
-5. Ask for approval; revise until approved
-6. On approval, remind user to generate courses with `/generate-course {program-id}/{course-id}`
+1. **Ask for program name** if not provided in arguments; convert to lowercase hyphenated slug for program-id
+2. Check if `courseData/{program-id}/program.md` exists; ask if found (overwrite/rename/modify)
+3. Gather program details: goal, prior knowledge, constraints; ask clarifying question if ambiguous
+4. Generate and write the document to `courseData/{program-id}/program.md`
+5. Show summary: program ID, stage counts, ordered list, any flags
+6. Ask for approval; revise until approved
+7. On approval, remind user to generate courses with `/generate-course {program-id}/{course-id}`

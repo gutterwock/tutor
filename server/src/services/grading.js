@@ -46,7 +46,7 @@ async function gradeFreeText(questionText, expectedAnswer, userAnswer) {
 		`  3 = mostly correct with minor issues\n` +
 		`  4 = fully correct\n\n` +
 		`Question: ${questionText}\n` +
-		`Expected answer: ${JSON.stringify(expectedAnswer)}\n` +
+		`Grading rubric (the answer should look something like this, OR cover these key points): ${JSON.stringify(expectedAnswer)}\n` +
 		`Student response: ${JSON.stringify(userAnswer)}\n\n` +
 		`Respond with JSON only. Example: {"correctness": 3}`;
 

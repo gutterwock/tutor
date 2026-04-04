@@ -99,6 +99,13 @@ Follow the base skill's review loop and subagent dispatch. Append these language
 
 **Per subtopic minimums:** Vocabulary: L2→L1, L1→L2, fill-in-blank, register question. Grammar: form ID, correct-form selection, error correction, sentence-production freeText. Integration: passage-based comprehension.
 
+**freeText scope by course position (beginner/intro levels only — A1, A2, HSK1–2, N5–N4, equiv.):** Scale expected production to what a learner can realistically produce at that point in the course. At higher levels (B1+) learners already have a foundation, so longer production is fine from the start.
+- **Early topics (first ~3 topics):** freeText only for single words or very short fixed phrases. No sentence production. Prefer singleChoice/exactMatch for production tasks.
+- **Mid-course:** freeText may ask for simple short sentences (one clause). Avoid multi-sentence or open-ended prompts unless the subtopic explicitly teaches written production.
+- **Later topics / integration topic:** freeText may ask for full sentences or short paragraphs as appropriate to what has been taught.
+
+Adjust the grading rubric accordingly — in early topics of beginner courses the `answer:` field should be a single word, short phrase, or 1–2 key points; never a full prose paragraph until the learner has had enough exposure to produce one.
+
 **Distractors:** Use related vocabulary, common conjugation errors, near-synonyms. Never obviously wrong.
 
 ---

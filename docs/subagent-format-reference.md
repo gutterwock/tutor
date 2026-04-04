@@ -35,7 +35,7 @@ explanation: text      ← optional; use sparingly
 - `singleChoice` — `answer: b`
 - `multiChoice` — `answer: abc` (concatenated keys, no separator)
 - `ordering` — `answer: bcad` (correct sequence, no separator)
-- `freeText` — `answer: sample correct response` (AI grading reference)
+- `freeText` — grading rubric. Prefer bullet-point key concepts: `answer: • defines X • explains Y • gives example Z`. Use full prose only when bullet points would lose essential nuance. Keep concise — this is a rubric, not a model essay.
 - `exactMatch` — one `answer:` line per accepted string
 
 ## content→question linking
