@@ -25,6 +25,7 @@ CREATE TABLE syllabus (
     description   TEXT,
     prerequisites TEXT[] DEFAULT '{}',
     exam          JSONB,
+    metadata      JSONB DEFAULT '{}',
     sort_order    INTEGER,
     checksum      VARCHAR(64),
     embedding     vector(384)
@@ -127,16 +128,18 @@ CREATE INDEX idx_question_content_ids   ON question  USING gin (content_ids);
 -- Persistent work items for every enrolled user. Items are never deleted
 -- (except on unenroll); they move between priority tiers as the user studies.
 --
--- priority tiers (ORDER BY priority DESC — higher = shown sooner):
---   -1          locked (not yet unlocked by cron)
---   0 – 99      tier 0: maintenance (stays in tier 0 after consumption, re-randomised)
---   100 – 199   tier 1
---   200 – 299   tier 2
---   300 – 399   tier 3: newly unlocked (starting tier)
---   400 – 499   tier 4: failed questions (highest urgency)
+-- priority bands (ORDER BY priority DESC — higher = shown sooner):
+--     0          locked (not yet unlocked)
+--   1–3          mastered (circulates 3→2→1→3 on each success/view)
+--   4–53         revision bottom band
+--   54–103       revision middle band
+--   104–153      revision top band
+--   154–253      new (just unlocked, not yet seen)
+--   254          failed question
+--   255          prereq content for a failed question
 --
--- On enroll all items are inserted at -1. The cron promotes them to tier 3
--- as subtopics are unlocked. Exact priority within a tier is random.
+-- On enroll all items are inserted at 0. The pipeline promotes them to 154–253
+-- as subtopics are unlocked. Next subtopic unlocks when all items drop below 154.
 CREATE TABLE study_queue (
     id          UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     UUID    NOT NULL,
@@ -144,7 +147,7 @@ CREATE TABLE study_queue (
     subtopic_id TEXT    NOT NULL REFERENCES syllabus(id) ON DELETE CASCADE,
     item_type   TEXT    NOT NULL CHECK (item_type IN ('content', 'question')),
     item_id     UUID    NOT NULL,
-    priority    INTEGER NOT NULL DEFAULT -1
+    priority    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE UNIQUE INDEX idx_study_queue_dedup    ON study_queue (user_id, item_type, item_id);

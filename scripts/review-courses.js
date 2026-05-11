@@ -11,6 +11,7 @@ const path = require('path');
  *   node scripts/review-courses.js spanish-a1-core    # one course
  *
  * Options:
+ *   --fix              Auto-fix known formatting errors, then re-validate
  *   --data-dir <path>  Path to courseData directory (default: ../courseData relative to script)
  */
 
@@ -35,7 +36,15 @@ class CourseValidator {
     this.checkTags();
     const headerErrors = this.checkContentHeaders();
     this.errors.push(...headerErrors);
+    this.checkFileHeader();
     return { errors: this.errors, warnings: this.warnings };
+  }
+
+  checkFileHeader() {
+    const header = this.lines.slice(0, 5).join('\n');
+    if (!/^model:\s+\S+/m.test(header)) {
+      this.warnings.push('Missing model: field in file header (add e.g. "model: claude-sonnet-4-5" near the top)');
+    }
   }
 
   parseQuestions() {
@@ -169,7 +178,7 @@ class CourseValidator {
   }
 
   checkTags() {
-    // Check for duplicate questions (same options and answer)
+    // Check for duplicate questions (same type, options, answer, and text)
     const seen = new Map();
     this.questions.forEach((q, idx) => {
       const answerKey = q.type === 'exactMatch' ? JSON.stringify([...q.answers].sort()) : q.answer;
@@ -323,13 +332,68 @@ function reviewAllCourses() {
   return totalErrors === 0;
 }
 
-// CLI — parse --data-dir then dispatch
+function fixContentHeaders(filePath) {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const fixed = content.replace(/^## phase:(atomic|complex|integration)(\s)/gm, '## [phase:$1]$2');
+  if (fixed === content) return 0;
+  const count = (content.match(/^## phase:(atomic|complex|integration)\s/gm) || []).length;
+  fs.writeFileSync(filePath, fixed, 'utf-8');
+  return count;
+}
+
+function fixCourse(courseDir, displayName) {
+  const files = fs.readdirSync(courseDir)
+    .filter(f => f.endsWith('.md') && f !== 'syllabus.md' && f !== 'program.md');
+
+  let totalFixes = 0;
+  console.log(`\n🔧 Fixing course: ${displayName}\n`);
+
+  files.forEach(file => {
+    const fixes = fixContentHeaders(path.join(courseDir, file));
+    if (fixes > 0) {
+      console.log(`   ✓ ${file}: ${fixes} header${fixes === 1 ? '' : 's'} fixed`);
+      totalFixes += fixes;
+    }
+  });
+
+  console.log(`\n   ${totalFixes} fix${totalFixes === 1 ? '' : 'es'} applied across ${files.length} files`);
+
+  return reviewCourse(courseDir, displayName);
+}
+
+function fixAllCourses() {
+  const courses = discoverAllCourses();
+  let totalFixes = 0;
+
+  console.log(`\n🔧 Fixing all courses (${courses.length})\n`);
+
+  courses.forEach(({ courseDir, displayName }) => {
+    const files = fs.readdirSync(courseDir)
+      .filter(f => f.endsWith('.md') && f !== 'syllabus.md' && f !== 'program.md');
+    files.forEach(file => {
+      const fixes = fixContentHeaders(path.join(courseDir, file));
+      if (fixes > 0) totalFixes += fixes;
+    });
+  });
+
+  console.log(`   ${totalFixes} fix${totalFixes === 1 ? '' : 'es'} applied\n`);
+
+  return reviewAllCourses();
+}
+
+// TODO: add --stamp-model <model> flag (or integrate into another script) to write
+// "model: <model>" into the header of subtopic files that are missing it.
+
+// CLI — parse --data-dir and --fix then dispatch
 const _allArgs = process.argv.slice(2);
 const courseArgs = [];
+let fixMode = false;
 
 for (let i = 0; i < _allArgs.length; i++) {
   if (_allArgs[i] === '--data-dir') {
     COURSE_DATA_DIR = path.resolve(_allArgs[++i]);
+  } else if (_allArgs[i] === '--fix') {
+    fixMode = true;
   } else {
     courseArgs.push(_allArgs[i]);
   }
@@ -337,15 +401,30 @@ for (let i = 0; i < _allArgs.length; i++) {
 
 const arg = courseArgs[0];
 
-if (!arg) {
-  const success = reviewAllCourses();
-  process.exit(success ? 0 : 1);
-} else {
-  const resolved = resolveRef(arg);
-  if (!resolved) {
-    console.error(`Course not found: ${arg}`);
-    process.exit(1);
+if (fixMode) {
+  if (!arg) {
+    const success = fixAllCourses();
+    process.exit(success ? 0 : 1);
+  } else {
+    const resolved = resolveRef(arg);
+    if (!resolved) {
+      console.error(`Course not found: ${arg}`);
+      process.exit(1);
+    }
+    const success = fixCourse(resolved.courseDir, resolved.displayName);
+    process.exit(success ? 0 : 1);
   }
-  const success = reviewCourse(resolved.courseDir, resolved.displayName);
-  process.exit(success ? 0 : 1);
+} else {
+  if (!arg) {
+    const success = reviewAllCourses();
+    process.exit(success ? 0 : 1);
+  } else {
+    const resolved = resolveRef(arg);
+    if (!resolved) {
+      console.error(`Course not found: ${arg}`);
+      process.exit(1);
+    }
+    const success = reviewCourse(resolved.courseDir, resolved.displayName);
+    process.exit(success ? 0 : 1);
+  }
 }

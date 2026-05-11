@@ -1,16 +1,15 @@
 /**
  * Tests for models/queueModel.js
  *
- * Pure utility functions (tierOf, randInTier, nextPriority) are tested
- * without mocking. DB-dependent functions mock the pg pool.
+ * Pure utility functions (bandOf, nextPriority) are tested without mocking.
+ * DB-dependent functions mock the pg pool.
  */
 
 jest.mock("../src/config/db", () => ({ query: jest.fn() }));
 
 const pool = require("../src/config/db");
 const {
-	tierOf,
-	randInTier,
+	bandOf,
 	nextPriority,
 	transitionQuestionTier,
 	consumeContent,
@@ -19,44 +18,34 @@ const {
 
 afterEach(() => jest.clearAllMocks());
 
-// ── tierOf ────────────────────────────────────────────────────────────────────
+// ── bandOf ────────────────────────────────────────────────────────────────────
 
-describe("tierOf", () => {
-	test("locked returns -1", () => {
-		expect(tierOf(-1)).toBe(-1);
-	});
-	test("tier 0 boundaries", () => {
-		expect(tierOf(0)).toBe(0);
-		expect(tierOf(99)).toBe(0);
-	});
-	test("tier 1 boundaries", () => {
-		expect(tierOf(100)).toBe(1);
-		expect(tierOf(199)).toBe(1);
-	});
-	test("tier 2 boundaries", () => {
-		expect(tierOf(200)).toBe(2);
-		expect(tierOf(299)).toBe(2);
-	});
-	test("tier 3 boundaries", () => {
-		expect(tierOf(300)).toBe(3);
-		expect(tierOf(399)).toBe(3);
-	});
-	test("tier 4 boundaries", () => {
-		expect(tierOf(400)).toBe(4);
-		expect(tierOf(499)).toBe(4);
-	});
-});
+describe("bandOf", () => {
+	test("0 → locked", () => { expect(bandOf(0)).toBe("locked"); });
+	test("1 → jail", () => { expect(bandOf(1)).toBe("jail"); });
 
-// ── randInTier ────────────────────────────────────────────────────────────────
-
-describe("randInTier", () => {
-	test.each([0, 1, 2, 3, 4])("tier %i returns value in correct range", (tier) => {
-		for (let i = 0; i < 20; i++) {
-			const p = randInTier(tier);
-			expect(p).toBeGreaterThanOrEqual(tier * 100);
-			expect(p).toBeLessThan(tier * 100 + 100);
-		}
+	test("mastered boundaries", () => {
+		expect(bandOf(2)).toBe("mastered");
+		expect(bandOf(4)).toBe("mastered");
 	});
+	test("revision bottom boundaries", () => {
+		expect(bandOf(5)).toBe("rev_bot");
+		expect(bandOf(53)).toBe("rev_bot");
+	});
+	test("revision middle boundaries", () => {
+		expect(bandOf(54)).toBe("rev_mid");
+		expect(bandOf(103)).toBe("rev_mid");
+	});
+	test("revision top boundaries", () => {
+		expect(bandOf(104)).toBe("rev_top");
+		expect(bandOf(153)).toBe("rev_top");
+	});
+	test("new band boundaries", () => {
+		expect(bandOf(154)).toBe("new");
+		expect(bandOf(253)).toBe("new");
+	});
+	test("254 → failed_q", () => { expect(bandOf(254)).toBe("failed_q"); });
+	test("255 → failed_c", () => { expect(bandOf(255)).toBe("failed_c"); });
 });
 
 // ── nextPriority ──────────────────────────────────────────────────────────────
@@ -66,62 +55,59 @@ describe("nextPriority", () => {
 		return Array.from({ length: 30 }, fn);
 	}
 
-	test("fail from any tier → tier 4 (400–499)", () => {
-		for (const tier of [0, 1, 2, 3]) {
-			const results = runMany(() => nextPriority(tier * 100 + 50, false));
-			results.forEach((p) => {
-				expect(p).toBeGreaterThanOrEqual(400);
-				expect(p).toBeLessThan(500);
-			});
+	test("fail from any band → 254", () => {
+		for (const p of [2, 3, 4, 20, 80, 130, 200, 253]) {
+			runMany(() => nextPriority(p, false)).forEach((r) => expect(r).toBe(254));
 		}
 	});
 
-	test("tier 4 success → tier 2 (200–299)", () => {
-		const results = runMany(() => nextPriority(450, true));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(200);
-			expect(p).toBeLessThan(300);
+	test("254 fail → stays 254", () => {
+		runMany(() => nextPriority(254, false)).forEach((r) => expect(r).toBe(254));
+	});
+
+	test("254 success → rev top (104–153)", () => {
+		runMany(() => nextPriority(254, true)).forEach((p) => {
+			expect(p).toBeGreaterThanOrEqual(104);
+			expect(p).toBeLessThanOrEqual(153);
 		});
 	});
 
-	test("tier 3 success → tier 2 (200–299)", () => {
-		const results = runMany(() => nextPriority(350, true));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(200);
-			expect(p).toBeLessThan(300);
+	test("255 success → rev top (104–153)", () => {
+		runMany(() => nextPriority(255, true)).forEach((p) => {
+			expect(p).toBeGreaterThanOrEqual(104);
+			expect(p).toBeLessThanOrEqual(153);
 		});
 	});
 
-	test("tier 2 success → tier 1 (100–199)", () => {
-		const results = runMany(() => nextPriority(250, true));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(100);
-			expect(p).toBeLessThan(200);
+	test("new (154–253) success → rev top (104–153)", () => {
+		runMany(() => nextPriority(200, true)).forEach((p) => {
+			expect(p).toBeGreaterThanOrEqual(104);
+			expect(p).toBeLessThanOrEqual(153);
 		});
 	});
 
-	test("tier 1 success → tier 0 (0–99)", () => {
-		const results = runMany(() => nextPriority(150, true));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(0);
-			expect(p).toBeLessThan(100);
+	test("rev top (104–153) success → rev mid (54–103)", () => {
+		runMany(() => nextPriority(130, true)).forEach((p) => {
+			expect(p).toBeGreaterThanOrEqual(54);
+			expect(p).toBeLessThanOrEqual(103);
 		});
 	});
 
-	test("tier 0 success → stays in tier 0 (0–99)", () => {
-		const results = runMany(() => nextPriority(50, true));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(0);
-			expect(p).toBeLessThan(100);
+	test("rev mid (54–103) success → rev bot (4–53)", () => {
+		runMany(() => nextPriority(80, true)).forEach((p) => {
+			expect(p).toBeGreaterThanOrEqual(4);
+			expect(p).toBeLessThanOrEqual(53);
 		});
 	});
 
-	test("tier 4 fail → tier 4 (400–499)", () => {
-		const results = runMany(() => nextPriority(450, false));
-		results.forEach((p) => {
-			expect(p).toBeGreaterThanOrEqual(400);
-			expect(p).toBeLessThan(500);
-		});
+	test("rev bot (5–53) success → 4 (mastered entry)", () => {
+		runMany(() => nextPriority(20, true)).forEach((p) => expect(p).toBe(4));
+	});
+
+	test("mastered circulates: 4→3, 3→2, 2→4", () => {
+		expect(nextPriority(4, true)).toBe(3);
+		expect(nextPriority(3, true)).toBe(2);
+		expect(nextPriority(2, true)).toBe(4);
 	});
 });
 
@@ -132,57 +118,66 @@ describe("transitionQuestionTier", () => {
 	const questionId = "q-1";
 	const queueId = "sq-1";
 
-	test("success (correctness >= 3) moves item down a tier", async () => {
-		// Item is in tier 3 (priority 350)
+	test("success moves item to rev top (104–153)", async () => {
 		pool.query
-			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 350 }] }) // SELECT
-			.mockResolvedValueOnce({ rows: [] });                                // UPDATE
+			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 200 }] })
+			.mockResolvedValueOnce({ rows: [] });
 
 		await transitionQuestionTier(userId, questionId, 3);
 
-		const updateCall = pool.query.mock.calls[1];
-		const newPriority = updateCall[1][0];
-		expect(newPriority).toBeGreaterThanOrEqual(200);
-		expect(newPriority).toBeLessThan(300);
+		const newPriority = pool.query.mock.calls[1][1][0];
+		expect(newPriority).toBeGreaterThanOrEqual(104);
+		expect(newPriority).toBeLessThanOrEqual(153);
 	});
 
-	test("fail (correctness < 3) sends item to tier 4", async () => {
+	test("fail sends question to 254 and fires content update to 255", async () => {
 		pool.query
-			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 350 }] }) // SELECT
-			.mockResolvedValueOnce({ rows: [] })                                // UPDATE question
-			.mockResolvedValueOnce({ rows: [] });                               // UPDATE prereq content
+			.mockResolvedValueOnce({ rows: [{ id: queueId, priority: 200 }] })
+			.mockResolvedValueOnce({ rows: [] })  // UPDATE question → 254
+			.mockResolvedValueOnce({ rows: [] }); // UPDATE prereq content → 255
 
 		await transitionQuestionTier(userId, questionId, 1);
 
-		const updateCall = pool.query.mock.calls[1];
-		const newPriority = updateCall[1][0];
-		expect(newPriority).toBeGreaterThanOrEqual(400);
-		expect(newPriority).toBeLessThan(500);
+		const newPriority = pool.query.mock.calls[1][1][0];
+		expect(newPriority).toBe(254);
+		expect(pool.query).toHaveBeenCalledTimes(3);
 	});
 
 	test("does nothing if item not found in queue", async () => {
 		pool.query.mockResolvedValueOnce({ rows: [] });
 		await transitionQuestionTier(userId, questionId, 4);
-		expect(pool.query).toHaveBeenCalledTimes(1); // only SELECT, no UPDATE
+		expect(pool.query).toHaveBeenCalledTimes(1);
 	});
 });
 
 // ── consumeContent ────────────────────────────────────────────────────────────
 
 describe("consumeContent", () => {
-	test("moves content item down one tier", async () => {
-		const item = { id: "sq-1", user_id: "u-1", item_id: "c-1", subtopic_id: "sub-1", priority: 350 };
+	test("moves content from new to rev top (104–153)", async () => {
+		const item = { id: "sq-1", user_id: "u-1", item_id: "c-1", subtopic_id: "sub-1", priority: 200 };
 		pool.query
-			.mockResolvedValueOnce({ rows: [item] })  // SELECT
-			.mockResolvedValueOnce({ rows: [] });       // UPDATE
+			.mockResolvedValueOnce({ rows: [item] })
+			.mockResolvedValueOnce({ rows: [] });
 
 		const result = await consumeContent("sq-1");
 
-		const updateCall = pool.query.mock.calls[1];
-		const newPriority = updateCall[1][0];
-		expect(newPriority).toBeGreaterThanOrEqual(200);
-		expect(newPriority).toBeLessThan(300);
+		const newPriority = pool.query.mock.calls[1][1][0];
+		expect(newPriority).toBeGreaterThanOrEqual(104);
+		expect(newPriority).toBeLessThanOrEqual(153);
 		expect(result.id).toBe("sq-1");
+	});
+
+	test("moves content from 255 to rev top (104–153)", async () => {
+		const item = { id: "sq-1", user_id: "u-1", item_id: "c-1", subtopic_id: "sub-1", priority: 255 };
+		pool.query
+			.mockResolvedValueOnce({ rows: [item] })
+			.mockResolvedValueOnce({ rows: [] });
+
+		const result = await consumeContent("sq-1");
+
+		const newPriority = pool.query.mock.calls[1][1][0];
+		expect(newPriority).toBeGreaterThanOrEqual(104);
+		expect(newPriority).toBeLessThanOrEqual(153);
 	});
 
 	test("returns null if item not found", async () => {
@@ -200,7 +195,7 @@ describe("insertLocked", () => {
 		expect(pool.query).not.toHaveBeenCalled();
 	});
 
-	test("inserts items with priority -1", async () => {
+	test("inserts items with priority 0", async () => {
 		pool.query.mockResolvedValueOnce({ rows: [] });
 		const items = [
 			{ user_id: "u1", course_id: "c1", subtopic_id: "s1", item_type: "content", item_id: "i1" },
@@ -211,6 +206,7 @@ describe("insertLocked", () => {
 		const sql = pool.query.mock.calls[0][0];
 		expect(sql).toContain("INSERT INTO study_queue");
 		expect(sql).toContain("ON CONFLICT");
-		expect(sql).toContain("-1");
+		expect(sql).toContain(",0)");
+		expect(sql).not.toContain("-1");
 	});
 });

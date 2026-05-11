@@ -2,45 +2,91 @@ const pool = require("../config/db");
 
 const FREETEXT_PASS_THRESHOLD = parseInt(process.env.FREETEXT_PASS_THRESHOLD || "3", 10);
 
-// ── Tier helpers ───────────────────────────────────────────────────────────────
+// ── Priority constants ─────────────────────────────────────────────────────────
+//
+//   0          locked (not yet unlocked)
+//   1          jail (mastered but never shown)
+//   2–4        mastered (visible) — circulates 4→3→2→4 on each success/view
+//   5–53       revision bottom band
+//   54–103     revision middle band
+//   104–153    revision top band
+//   154–253    new (just unlocked, not yet seen)
+//   254        failed question
+//   255        prereq content for a failed question
+//
+// ORDER BY priority DESC — higher value = shown sooner.
 
-const TIER_RANGES = [
-	{ tier: 4, min: 400, max: 499 },
-	{ tier: 3, min: 300, max: 399 },
-	{ tier: 2, min: 200, max: 299 },
-	{ tier: 1, min: 100, max: 199 },
-	{ tier: 0, min:   0, max:  99 },
-];
+const LOCKED   = 0;
+const JAIL     = 1;
+const MASTERED = { lo: 2, hi: 4 };
+const REV_BOT  = { lo:   5, hi:  53 };
+const REV_MID  = { lo:  54, hi: 103 };
+const REV_TOP  = { lo: 104, hi: 153 };
+const NEW_BAND = { lo: 154, hi: 253 };
+const FAILED_Q = 254;
+const FAILED_C = 255;
 
-function tierOf(priority) {
-	if (priority < 0) return -1;
-	return Math.floor(priority / 100);
-}
-
-/** Random priority within a tier band. */
-function randInTier(tier) {
-	return tier * 100 + Math.floor(Math.random() * 100);
+function randInBand({ lo, hi }) {
+	return lo + Math.floor(Math.random() * (hi - lo + 1));
 }
 
 /**
- * Compute new priority after consumption.
- * success = correctness >= 3 (or true for content items).
- * currentPriority is the item's current priority value.
+ * Return the named band for a priority value.
+ */
+function bandOf(priority) {
+	if (priority === LOCKED)     return "locked";
+	if (priority === JAIL)       return "jail";
+	if (priority <= MASTERED.hi) return "mastered";
+	if (priority <= REV_BOT.hi)  return "rev_bot";
+	if (priority <= REV_MID.hi)  return "rev_mid";
+	if (priority <= REV_TOP.hi)  return "rev_top";
+	if (priority <= NEW_BAND.hi) return "new";
+	if (priority === FAILED_Q)   return "failed_q";
+	if (priority === FAILED_C)   return "failed_c";
+	return "unknown";
+}
+
+/**
+ * Compute new priority after a question answer (success/fail) or content view (always success).
+ *
+ * Progression on success/view:
+ *   new (154–253) → rev top (104–153)
+ *   rev top       → rev mid (54–103)
+ *   rev mid       → rev bot (5–53)
+ *   rev bot       → mastered entry (4)
+ *   mastered      → circulates 4→3→2→4
+ *
+ * On failure: always → 254 (FAILED_Q).
  */
 function nextPriority(currentPriority, success) {
-	const tier = tierOf(currentPriority);
-	if (!success) return 400 + Math.floor(Math.random() * 99); // fail → 400–498 (499 left for prereq content)
-	if (tier === 4) return randInTier(2);       // tier 4 success → tier 2
-	if (tier === 0) return randInTier(0);       // tier 0 stays in tier 0
-	return randInTier(Math.max(0, tier - 1));   // down one tier
+	if (!success) return FAILED_Q;
+	if (currentPriority >= NEW_BAND.lo) return randInBand(REV_TOP); // new + failed → rev top
+	if (currentPriority >= REV_TOP.lo)  return randInBand(REV_MID);
+	if (currentPriority >= REV_MID.lo)  return randInBand(REV_BOT);
+	if (currentPriority >= REV_BOT.lo)  return 4;
+	// mastered circulation: 4→3→2→4
+	if (currentPriority === 4) return 3;
+	if (currentPriority === 3) return 2;
+	return 4;
 }
 
 // ── Read ──────────────────────────────────────────────────────────────────────
 
+const FETCH_RANGES = [
+	{ min: FAILED_C,     max: FAILED_C     }, // 255: prereq content for failed question
+	{ min: FAILED_Q,     max: FAILED_Q     }, // 254: failed question
+	{ min: NEW_BAND.lo,  max: NEW_BAND.hi  }, // 154–253: new
+	{ min: REV_TOP.lo,   max: REV_TOP.hi   }, // 104–153: revision top
+	{ min: REV_MID.lo,   max: REV_MID.hi   }, //  54–103: revision middle
+	{ min: REV_BOT.lo,   max: REV_BOT.hi   }, //    5–53: revision bottom
+	{ min: MASTERED.lo,  max: MASTERED.hi  }, //    2–4: mastered
+	// jail (1) is never fetched
+];
+
 /**
- * Fetch up to `limitPerTier` items from each tier (0–4) for a user.
- * courseIds filters to selected courses. Items at -1 (locked) are excluded.
- * Returns a flat array ordered: tier4 first, then 3, 2, 1, 0.
+ * Fetch up to `limitPerTier` items from each priority band for a user.
+ * Locked items (priority = 0) are never returned.
+ * Returns a flat array ordered: failed_c, failed_q, new, rev_top, rev_mid, rev_bot, mastered.
  */
 async function tieredFetch(userId, courseIds, limitPerTier = 10, questionOnly = false) {
 	if (!courseIds || courseIds.length === 0) return [];
@@ -49,7 +95,7 @@ async function tieredFetch(userId, courseIds, limitPerTier = 10, questionOnly = 
 	const parts = [];
 	const params = [userId, courseIds, limitPerTier];
 
-	for (const { min, max } of TIER_RANGES) {
+	for (const { min, max } of FETCH_RANGES) {
 		parts.push(`
 			(SELECT id, user_id, course_id, subtopic_id, item_type, item_id, priority
 			 FROM study_queue
@@ -64,37 +110,35 @@ async function tieredFetch(userId, courseIds, limitPerTier = 10, questionOnly = 
 }
 
 /**
- * Count items per tier for a user+course.
- * Returns { locked, tier0, tier1, tier2, tier3, tier4 }.
+ * Count items per band for a user+course.
+ * Returns { locked, mastered, revision, new_items, failed }.
  */
 async function getTierCounts(userId, courseId) {
 	const result = await pool.query(
 		`SELECT
-		   COUNT(*) FILTER (WHERE priority < 0)                 AS locked,
-		   COUNT(*) FILTER (WHERE priority BETWEEN   0 AND  99) AS tier0,
-		   COUNT(*) FILTER (WHERE priority BETWEEN 100 AND 199) AS tier1,
-		   COUNT(*) FILTER (WHERE priority BETWEEN 200 AND 299) AS tier2,
-		   COUNT(*) FILTER (WHERE priority BETWEEN 300 AND 399) AS tier3,
-		   COUNT(*) FILTER (WHERE priority BETWEEN 400 AND 499) AS tier4
+		   COUNT(*) FILTER (WHERE priority = 0)                 AS locked,
+		   COUNT(*) FILTER (WHERE priority IN (1, 2, 3, 4))    AS mastered,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 5   AND 153) AS revision,
+		   COUNT(*) FILTER (WHERE priority BETWEEN 154 AND 253) AS new_items,
+		   COUNT(*) FILTER (WHERE priority >= 254)              AS failed
 		 FROM study_queue
 		 WHERE user_id = $1 AND course_id = $2`,
 		[userId, courseId]
 	);
 	const r = result.rows[0];
 	return {
-		locked: parseInt(r.locked, 10),
-		tier0:  parseInt(r.tier0,  10),
-		tier1:  parseInt(r.tier1,  10),
-		tier2:  parseInt(r.tier2,  10),
-		tier3:  parseInt(r.tier3,  10),
-		tier4:  parseInt(r.tier4,  10),
+		locked:    parseInt(r.locked,    10),
+		mastered:  parseInt(r.mastered,  10),
+		revision:  parseInt(r.revision,  10),
+		new_items: parseInt(r.new_items, 10),
+		failed:    parseInt(r.failed,    10),
 	};
 }
 
-/** Count unlocked items (priority >= 0) for a user. */
+/** Count unlocked items (priority > 0) for a user. */
 async function queueSize(userId) {
 	const result = await pool.query(
-		`SELECT COUNT(*) AS count FROM study_queue WHERE user_id = $1 AND priority >= 0`,
+		`SELECT COUNT(*) AS count FROM study_queue WHERE user_id = $1 AND priority > ${LOCKED}`,
 		[userId]
 	);
 	return parseInt(result.rows[0].count, 10);
@@ -103,7 +147,7 @@ async function queueSize(userId) {
 // ── Write ─────────────────────────────────────────────────────────────────────
 
 /**
- * Bulk-insert queue items at priority -1 (locked).
+ * Bulk-insert queue items at priority 0 (locked).
  * ON CONFLICT DO NOTHING — safe to call multiple times.
  */
 async function insertLocked(items) {
@@ -112,7 +156,7 @@ async function insertLocked(items) {
 	const params = [];
 	let p = 1;
 	for (const item of items) {
-		values.push(`($${p},$${p+1},$${p+2},$${p+3},$${p+4},-1)`);
+		values.push(`($${p},$${p+1},$${p+2},$${p+3},$${p+4},${LOCKED})`);
 		params.push(item.user_id, item.course_id, item.subtopic_id, item.item_type, item.item_id);
 		p += 5;
 	}
@@ -125,21 +169,21 @@ async function insertLocked(items) {
 }
 
 /**
- * Promote all locked items for a subtopic from -1 to tier 3 using position-based priorities.
+ * Promote all locked items for a subtopic from 0 to the new band using position-based priorities.
  *
- * Content items (301–398, order-preserving):
- *   N content items divide the 98-slot range into N equal segments.
+ * Content items (154–252, order-preserving):
+ *   N content items divide the 99-slot range into N equal segments.
  *   Earlier items (lower sort_order) get higher-priority segments.
  *
- * Ungated questions (content_ids = []): fixed priority 399 (shown before any content).
+ * Ungated questions (content_ids = []): fixed priority 253 (shown before any content).
  *
- * Gated questions (content_ids non-empty): random in [max(300, p−25), p−1]
+ * Gated questions (content_ids non-empty): random in [max(154, p−25), p−1]
  *   where p is the priority of the anchor content block (latest prereq).
- *   Multiple questions under the same block are assigned order-preserving
- *   sub-segments within the band; ties occur when the band is narrower than M.
  */
 async function promoteSubtopicItems(userId, subtopicId) {
-	const CONTENT_LO = 301, CONTENT_HI = 398, CONTENT_RANGE = CONTENT_HI - CONTENT_LO + 1;
+	const CONTENT_LO = NEW_BAND.lo;          // 154
+	const CONTENT_HI = NEW_BAND.hi - 1;      // 252
+	const CONTENT_RANGE = CONTENT_HI - CONTENT_LO + 1; // 99
 
 	// ── Content items ─────────────────────────────────────────────────────────
 	const contentRes = await pool.query(
@@ -147,15 +191,15 @@ async function promoteSubtopicItems(userId, subtopicId) {
 		 FROM study_queue sq
 		 JOIN content c ON c.id = sq.item_id
 		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
-		   AND sq.item_type = 'content' AND sq.priority = -1
+		   AND sq.item_type = 'content' AND sq.priority = ${LOCKED}
 		 ORDER BY c.sort_order`,
 		[userId, subtopicId]
 	);
 
 	const contentItems = contentRes.rows;
 	const N = contentItems.length;
-	const contentPriorityMap = {}; // content_id → assigned priority
-	const updates = [];             // { queue_id, priority }
+	const contentPriorityMap = {};
+	const updates = [];
 
 	for (let i = 0; i < N; i++) {
 		const segLo = CONTENT_LO + Math.floor(((N - 1 - i) * CONTENT_RANGE) / N);
@@ -173,13 +217,12 @@ async function promoteSubtopicItems(userId, subtopicId) {
 		 FROM study_queue sq
 		 JOIN question q ON q.id = sq.item_id
 		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
-		   AND sq.item_type = 'question' AND sq.priority = -1`,
+		   AND sq.item_type = 'question' AND sq.priority = ${LOCKED}`,
 		[userId, subtopicId]
 	);
 
-	// Group gated questions by their anchor content (latest prereq = min priority value)
 	const ungated = [];
-	const gatedGroups = new Map(); // anchorContentId → [{ queue_id, sort_order }]
+	const gatedGroups = new Map();
 
 	for (const q of questionRes.rows) {
 		const contentIds = q.content_ids ?? [];
@@ -197,15 +240,15 @@ async function promoteSubtopicItems(userId, subtopicId) {
 		}
 	}
 
-	// Ungated → 399
+	// Ungated → top of new band (253)
 	for (const q of ungated) {
-		updates.push({ queue_id: q.queue_id, priority: 399 });
+		updates.push({ queue_id: q.queue_id, priority: NEW_BAND.hi });
 	}
 
-	// Gated → order-preserving within [max(300, p−25), p−1]
+	// Gated → order-preserving within [max(154, p−25), p−1]
 	for (const [anchorId, questions] of gatedGroups) {
 		const p = contentPriorityMap[anchorId] ?? CONTENT_LO;
-		const bandLo = Math.max(300, p - 25);
+		const bandLo = Math.max(NEW_BAND.lo, p - 25);
 		const bandHi = p - 1;
 		const bandSize = bandHi - bandLo + 1;
 		const M = questions.length;
@@ -236,12 +279,10 @@ async function promoteSubtopicItems(userId, subtopicId) {
 }
 
 /**
- * Update priority of a content item when consumed (viewed).
- * Content always moves down one tier on consumption.
- * Returns the updated row (including subtopic_id for gated-question promotion).
+ * Update priority of a content item when viewed.
+ * Returns the updated row.
  */
 async function consumeContent(queueId) {
-	// Fetch current state
 	const row = await pool.query(
 		`SELECT id, user_id, item_id, subtopic_id, priority FROM study_queue WHERE id = $1`,
 		[queueId]
@@ -256,9 +297,11 @@ async function consumeContent(queueId) {
 /**
  * Update priority of a question item after grading.
  * correctness: 0–4. Success = correctness >= 3.
+ * On fail: question → 254, all associated content → 255.
+ * On 254 fail again: stays 254, associated content → 255.
  */
 async function transitionQuestionTier(userId, questionId, correctness) {
-	const success = correctness >= 3;
+	const success = correctness >= FREETEXT_PASS_THRESHOLD;
 	const row = await pool.query(
 		`SELECT id, priority FROM study_queue
 		 WHERE user_id = $1 AND item_type = 'question' AND item_id = $2`,
@@ -269,50 +312,33 @@ async function transitionQuestionTier(userId, questionId, correctness) {
 	const newPriority = nextPriority(priority, success);
 	await pool.query(`UPDATE study_queue SET priority = $1 WHERE id = $2`, [newPriority, id]);
 
-	// On fail, push prereq content items to a random priority above the question (within tier 4)
 	if (!success) {
 		await pool.query(
 			`UPDATE study_queue sq
-			 SET priority = $3 + 1 + floor(random() * (499 - $3))::int
+			 SET priority = ${FAILED_C}
 			 FROM question q
 			 WHERE q.id = $2
 			   AND sq.user_id = $1
 			   AND sq.item_type = 'content'
 			   AND sq.item_id = ANY(q.content_ids)
-			   AND sq.priority >= 0`,
-			[userId, questionId, newPriority]
+			   AND sq.priority > ${LOCKED}`,
+			[userId, questionId]
 		);
 	}
 }
 
 /**
- * Push items outside the 250–299 band (tiers 0–1 and lower tier 2) for a subtopic into that band.
- * Items already in 250–299 are left untouched. Locked (-1) and tier-4 (400+) items are unaffected.
+ * Push mastered/revision items for a subtopic back into the revision top band.
  * Used when regression is detected on a completed subtopic.
+ * Items in new/failed bands and locked items are unaffected.
  */
 async function regressSubtopicItems(userId, subtopicId) {
 	await pool.query(
 		`UPDATE study_queue
-		 SET priority = 250 + floor(random() * 50)::int
+		 SET priority = ${REV_TOP.lo} + floor(random() * ${REV_TOP.hi - REV_TOP.lo + 1})::int
 		 WHERE user_id = $1 AND subtopic_id = $2
-		   AND priority BETWEEN 0 AND 249`,
+		   AND priority >= ${JAIL} AND priority < ${NEW_BAND.lo}`,
 		[userId, subtopicId]
-	);
-}
-
-/**
- * Bump existing tier-3 items for a course by 20, capped at 399.
- * excludeSubtopicIds: subtopics just unlocked (their items were just placed into tier 3).
- */
-async function bumpCourseTier3(userId, courseId, excludeSubtopicIds) {
-	if (!excludeSubtopicIds.length) return;
-	await pool.query(
-		`UPDATE study_queue
-		 SET priority = LEAST(priority + 20, 399)
-		 WHERE user_id = $1 AND course_id = $2
-		   AND subtopic_id != ANY($3)
-		   AND priority BETWEEN 300 AND 399`,
-		[userId, courseId, excludeSubtopicIds]
 	);
 }
 
@@ -362,21 +388,22 @@ async function setItemPriority(queueId, priority) {
 }
 
 /**
- * Set all items in a subtopic (and optionally filtered by item_type) to a target tier.
- * targetTier: 0–4, -1 (locked). Priority within tier is randomized.
- * itemType: optional 'content' or 'question'; if omitted, all types included.
+ * Set all items in a subtopic to a target band.
+ *
+ * targetTier:
+ *   0 → locked (0)
+ *   1 → jail (1, mastered but never shown)
+ *   2 → mastered (random 2–4, visible)
+ *   3 → revision bottom (random 5–53)
+ *   4 → revision middle (random 54–103)
+ *   5 → revision top (random 104–153)
+ *   6 → new (random 154–253)
+ *
+ * itemType: optional 'content' or 'question'; if omitted, all types.
  * Returns count of affected rows.
  */
 async function setSubtopicItemsTier(userId, subtopicId, targetTier, itemType = null) {
-	let priority;
-	if (targetTier === -1) {
-		priority = -1;
-	} else {
-		const min = targetTier * 100;
-		const max = min + 99;
-		priority = min + Math.floor(Math.random() * 100);
-	}
-
+	const priority = tierToPriority(targetTier);
 	const typeFilter = itemType ? `AND item_type = $4` : "";
 	const params = [userId, subtopicId, priority];
 	if (itemType) params.push(itemType);
@@ -391,21 +418,11 @@ async function setSubtopicItemsTier(userId, subtopicId, targetTier, itemType = n
 }
 
 /**
- * Set all items in a topic (all subtopics under it) to a target tier for a user.
- * targetTier: 0–4, -1 (locked). Priority within tier is randomized.
- * itemType: optional 'content' or 'question'; if omitted, all types included.
- * Returns count of affected rows.
+ * Set all items in a topic (all subtopics under it) to a target band.
+ * Same targetTier semantics as setSubtopicItemsTier.
  */
 async function setTopicItemsTier(userId, topicId, targetTier, itemType = null) {
-	let priority;
-	if (targetTier === -1) {
-		priority = -1;
-	} else {
-		const min = targetTier * 100;
-		const max = min + 99;
-		priority = min + Math.floor(Math.random() * 100);
-	}
-
+	const priority = tierToPriority(targetTier);
 	const typeFilter = itemType ? `AND sq.item_type = $4` : "";
 	const params = [userId, topicId, priority];
 	if (itemType) params.push(itemType);
@@ -422,11 +439,24 @@ async function setTopicItemsTier(userId, topicId, targetTier, itemType = null) {
 	return result.rowCount;
 }
 
+function tierToPriority(targetTier) {
+	switch (targetTier) {
+		case 0:  return LOCKED;
+		case 1:  return JAIL;
+		case 2:  return randInBand(MASTERED);
+		case 3:  return randInBand(REV_BOT);
+		case 4:  return randInBand(REV_MID);
+		case 5:  return randInBand(REV_TOP);
+		case 6:  return randInBand(NEW_BAND);
+		default: return LOCKED;
+	}
+}
+
 module.exports = {
 	tieredFetch, queueSize, getTierCounts, setItemPriority,
-	insertLocked, promoteSubtopicItems, bumpCourseTier3,
+	insertLocked, promoteSubtopicItems,
 	consumeContent, transitionQuestionTier, regressSubtopicItems,
 	clearCourseItems, getSubtopicScore,
 	setSubtopicItemsTier, setTopicItemsTier,
-	tierOf, randInTier, nextPriority,
+	bandOf, nextPriority,
 };

@@ -11,7 +11,6 @@
 const pool = require("../config/db");
 const queueModel = require("../models/queueModel");
 
-const COMPLETION_THRESHOLD   = parseFloat(process.env.COMPLETION_THRESHOLD   || "2.5");
 const STRUGGLING_THRESHOLD   = parseFloat(process.env.STRUGGLING_THRESHOLD   || "1.5");
 const MIN_RESPONSES_STRUGGLE = parseInt(process.env.MIN_RESPONSES_STRUGGLE   || "3",  10);
 const RESPONSE_WINDOW        = parseInt(process.env.RESPONSE_WINDOW          || "10", 10);
@@ -25,43 +24,21 @@ async function runPipeline(userId) {
 
 // ── Completion check ──────────────────────────────────────────────────────────
 
+/**
+ * A subtopic is complete when all its items have moved out of the new and failed
+ * bands — i.e., no items with priority = 0 (locked) or priority >= 154 remain.
+ * Requires at least one item to exist (guards against empty subtopics).
+ */
 async function isSubtopicComplete(userId, subtopicId) {
-	const contentRes = await pool.query(
-		`SELECT COUNT(*) AS total,
-		        COUNT(*) FILTER (WHERE sq.priority != -1 AND NOT (sq.priority BETWEEN 300 AND 399)) AS viewed
-		 FROM study_queue sq
-		 JOIN content c ON c.id = sq.item_id
-		 WHERE sq.user_id = $1 AND sq.subtopic_id = $2
-		   AND sq.item_type = 'content'
-		   AND c.base_content = true AND c.active = true`,
+	const res = await pool.query(
+		`SELECT
+		   (COUNT(*) FILTER (WHERE priority = 0 OR priority >= 154) = 0 AND COUNT(*) > 0)
+		   AS is_passed
+		 FROM study_queue
+		 WHERE user_id = $1 AND subtopic_id = $2`,
 		[userId, subtopicId]
 	);
-	const { total, viewed } = contentRes.rows[0];
-	if (parseInt(total, 10) === 0) return false;
-	if (parseInt(viewed, 10) < parseInt(total, 10)) return false;
-
-	const scoreRes = await pool.query(
-		`SELECT COUNT(*)::int AS response_count,
-		        AVG(correctness)::float AS avg_correctness
-		 FROM (
-		   SELECT correctness, responded_at
-		   FROM (
-		     SELECT DISTINCT ON (r.question_id)
-		            r.correctness, r.responded_at
-		     FROM response r
-		     JOIN question q ON q.id = r.question_id
-		     WHERE r.user_id = $1 AND q.syllabus_id = $2 AND q.active = true
-		       AND NOT (q.question_type IN ('freeText', 'ordering') AND r.graded_at IS NULL)
-		     ORDER BY r.question_id, r.responded_at DESC
-		   ) latest_per_question
-		   ORDER BY responded_at DESC
-		   LIMIT 2
-		 ) last2`,
-		[userId, subtopicId]
-	);
-	const row = scoreRes.rows[0];
-	if (!row || row.response_count < 2) return false;
-	return row.avg_correctness >= COMPLETION_THRESHOLD;
+	return res.rows[0].is_passed;
 }
 
 async function checkAndComplete(userId) {
@@ -95,8 +72,8 @@ async function unlockNextForCourse(userId, courseId) {
 		          SELECT 1 FROM study_queue sq
 		          WHERE sq.user_id = $1
 		            AND sq.subtopic_id = cp.subtopic_id
-		            AND sq.priority BETWEEN 300 AND 399
-		        ) AS has_tier3
+		            AND sq.priority >= 154
+		        ) AS has_new
 		 FROM content_progress cp
 		 JOIN syllabus s ON s.id = cp.subtopic_id
 		 JOIN syllabus t ON t.id = s.parent_id
@@ -108,10 +85,9 @@ async function unlockNextForCourse(userId, courseId) {
 	const rows = res.rows;
 	if (rows.length === 0) return [];
 
-	// A subtopic is "passed" if formally completed, or active with no tier 3 items remaining
-	// (fallback: prevents users getting stuck when completion criteria are misconfigured)
+	// A subtopic is "passed" if formally completed, or active with nothing left in new/failed bands
 	const passedIds = new Set(
-		rows.filter((r) => r.completed || (r.active && !r.has_tier3)).map((r) => r.subtopic_id)
+		rows.filter((r) => r.completed || (r.active && !r.has_new)).map((r) => r.subtopic_id)
 	);
 	const unlocked = [];
 
@@ -122,10 +98,8 @@ async function unlockNextForCourse(userId, courseId) {
 		const prereqs = row.prerequisites ?? [];
 		let canUnlock;
 		if (prereqs.length > 0) {
-			// Explicit prerequisites: all must be passed
 			canUnlock = prereqs.every((p) => passedIds.has(p));
 		} else {
-			// Linear fallback: first subtopic is free; others require the previous to be passed
 			canUnlock = i === 0 || passedIds.has(rows[i - 1].subtopic_id);
 		}
 
@@ -138,10 +112,6 @@ async function unlockNextForCourse(userId, courseId) {
 			await queueModel.promoteSubtopicItems(userId, row.subtopic_id);
 			unlocked.push(row.subtopic_id);
 		}
-	}
-
-	if (unlocked.length > 0) {
-		await queueModel.bumpCourseTier3(userId, courseId, unlocked);
 	}
 
 	return unlocked;

@@ -4,8 +4,8 @@ const queueModel = require("../models/queueModel");
 /**
  * GET /queue?user_id=&course_ids=id1,id2&limit=10&question_only=true
  *
- * Returns up to `limit` items per tier (tiers 0–4) for the selected courses.
- * Items at priority -1 (locked) are never returned.
+ * Returns up to `limit` items per priority band for the selected courses.
+ * Locked items (priority = 0) are never returned.
  * The client applies review_pct logic to compose the session from the tiers.
  *
  * Each item is enriched with the full content/question body.
@@ -206,10 +206,10 @@ async function getQueueTierCounts(req, res) {
  * Body: {
  *   user_id: string,
  *   subtopic_id: string (OR topic_id: string),
- *   target_tier: number (0–4, or -1 for locked),
+ *   target_tier: number (0=locked, 1=jail, 2=mastered, 3=rev_bot, 4=rev_mid, 5=rev_top, 6=new),
  *   item_type: string? ('content', 'question', or omitted for both)
  * }
- * Sets all items in the given subtopic/topic to the target tier.
+ * Sets all items in the given subtopic/topic to the target band.
  * Returns { affected: number }.
  */
 async function setItemsTier(req, res) {
@@ -225,8 +225,8 @@ async function setItemsTier(req, res) {
 		if (target_tier === undefined || typeof target_tier !== "number" || !Number.isInteger(target_tier)) {
 			return res.status(400).json({ error: "Missing or invalid field: target_tier (must be integer)" });
 		}
-		if (target_tier < -1 || target_tier > 4) {
-			return res.status(400).json({ error: "target_tier must be in range -1 to 4" });
+		if (target_tier < 0 || target_tier > 6) {
+			return res.status(400).json({ error: "target_tier must be in range 0 to 6" });
 		}
 		if (item_type && !["content", "question"].includes(item_type)) {
 			return res.status(400).json({ error: "item_type must be 'content', 'question', or omitted" });

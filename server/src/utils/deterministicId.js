@@ -28,9 +28,10 @@ function contentId(syllabusId, title, body) {
 	return uuidv5(`content:${syllabusId}:${title}:${body}`);
 }
 
-function questionId(syllabusId, questionText, answer, contentIds, passage) {
+function questionId(syllabusId, questionText, answer, contentIds, passage, options) {
 	const sortedIds = [...contentIds].sort();
-	const base = `question:${syllabusId}:${questionText}:${JSON.stringify(answer)}:${JSON.stringify(sortedIds)}`;
+	const optionsStr = options ? `:${JSON.stringify(options)}` : '';
+	const base = `question:${syllabusId}:${questionText}:${JSON.stringify(answer)}:${JSON.stringify(sortedIds)}${optionsStr}`;
 	return uuidv5(passage ? `${base}:${passage}` : base);
 }
 

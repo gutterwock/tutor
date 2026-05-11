@@ -7,10 +7,11 @@ const { generateEmbedding, pgVector } = require("../services/embedding");
 /**
  * Compute a stable SHA-256 checksum over the mutable fields of a syllabus node.
  */
-function computeChecksum(name, description, prerequisites, exam) {
+function computeChecksum(name, description, prerequisites, exam, metadata) {
 	const payload = JSON.stringify({
 		description: description ?? null,
 		exam: exam ?? null,
+		metadata: metadata ?? {},
 		name,
 		prerequisites: prerequisites ?? [],
 	});
@@ -44,7 +45,8 @@ async function uploadSyllabus(req, res) {
 			course.name,
 			course.description,
 			course.prerequisites,
-			course.exam
+			course.exam,
+			course.metadata
 		);
 		const courseEmbedding = pgVector(
 			await generateEmbedding(`${course.name} ${course.description ?? ""}`)
@@ -57,6 +59,7 @@ async function uploadSyllabus(req, res) {
 			description: course.description ?? null,
 			prerequisites: course.prerequisites ?? [],
 			exam: course.exam ?? null,
+			metadata: course.metadata ?? {},
 			sort_order: 0,
 			checksum: courseChecksum,
 			embedding: courseEmbedding,
@@ -83,6 +86,7 @@ async function uploadSyllabus(req, res) {
 				description: topic.description ?? null,
 				prerequisites: topic.prerequisites ?? [],
 				exam: topic.exam ?? null,
+				metadata: {},
 				sort_order: ti,
 				checksum: topicChecksum,
 				embedding: topicEmbedding,
@@ -108,6 +112,7 @@ async function uploadSyllabus(req, res) {
 					description: sub.description ?? null,
 					prerequisites: sub.prerequisites ?? [],
 					exam: sub.exam ?? null,
+					metadata: {},
 					sort_order: si,
 					checksum: subChecksum,
 					embedding: subEmbedding,
@@ -146,8 +151,8 @@ async function getSyllabus(req, res) {
  * POST /syllabus/enroll
  * Body: { user_id, course_id }
  * Creates content_progress rows for all subtopics under the course.
- * Bulk-inserts all content + question items into study_queue at priority -1 (locked).
- * Then promotes up to 5 ungated items from the first subtopic to tier 3 (bias: 374–399).
+ * Bulk-inserts all content + question items into study_queue at priority 0 (locked).
+ * Then promotes the first subtopic's items to the new band and pins the top item at 253.
  */
 async function enrollInSyllabus(req, res) {
 	try {
@@ -181,7 +186,7 @@ async function enrollInSyllabus(req, res) {
 			if (result.rowCount > 0) enrolled++;
 		}
 
-		// Bulk-insert all content + question items at priority -1 (locked)
+		// Bulk-insert all content + question items at priority 0 (locked)
 		const subtopicIds = subtopics.map((s) => s.id);
 
 		const [contentRes, questionRes] = await Promise.all([
@@ -202,15 +207,14 @@ async function enrollInSyllabus(req, res) {
 
 		await queueModel.insertLocked(allItems);
 
-		// Promote first subtopic's items with position-based priorities,
-		// then guarantee the first item to be shown is at 399
+		// Promote first subtopic's items to the new band, then pin the top item at 253
 		if (subtopics.length > 0) {
 			await queueModel.promoteSubtopicItems(user_id, subtopics[0].id);
 			await pool.query(
-				`UPDATE study_queue SET priority = 399
+				`UPDATE study_queue SET priority = 253
 				 WHERE id = (
 				   SELECT id FROM study_queue
-				   WHERE user_id = $1 AND subtopic_id = $2 AND priority >= 0
+				   WHERE user_id = $1 AND subtopic_id = $2 AND priority > 0
 				   ORDER BY priority DESC LIMIT 1
 				 )`,
 				[user_id, subtopics[0].id]

@@ -40,7 +40,7 @@ Write to `courseData/{program-id}/program.md` (lowercase hyphenated slug). The p
 - **Project:** `Type: Project`, `Scope:` (enough detail to execute), `Prerequisites:`, `Estimated duration:`, `Outcomes:` (bullet list)
 - **Review:** `Type: Review`, `Scope: Spaced repetition over Stages X–Y`, `Prerequisites:`
 
-**5. Course Generation Guide:** List each course stage with the full nested path (`{program-id}/{course-id}`), scope, and prerequisites. User picks the skill (`/generate-course {program-id}/{course-id}`, `/generate-language-course {program-id}/{course-id}`). Projects/reviews need no generation.
+**5. Course Generation Guide:** List each course stage with the full nested path (`{program-id}/{course-id}`), scope, and prerequisites. All courses use `/generate-course {program-id}/{course-id}` — domain guidelines are auto-detected. Projects/reviews need no generation.
 
 ---
 
@@ -62,4 +62,4 @@ Write to `courseData/{program-id}/program.md` (lowercase hyphenated slug). The p
 4. Generate and write the document to `courseData/{program-id}/program.md`
 5. Show summary: program ID, stage counts, ordered list, any flags
 6. Ask for approval; revise until approved
-7. On approval, remind user to generate courses with `/generate-course {program-id}/{course-id}`
+7. On approval, remind user to generate courses with `/generate-course {program-id}/{course-id}` (domain guidelines are auto-detected)

@@ -31,6 +31,20 @@ explanation: text      ← optional; use sparingly
 
 **`caseSensitive`** — only use when capitalisation is itself the tested concept (e.g. a command or syntax that must be typed exactly). Do not use for proper nouns, technical terms, or named concepts where the meaning is what matters.
 
+**Difficulty scale:** `0` recall → `1` comprehension → `2` application → `3` analysis → `4` synthesis
+
+**Meta-option wording** — when an option refers to other options, use exactly these phrasings:
+
+| Meaning | Required wording |
+|---------|-----------------|
+| All options correct | `All of the above` |
+| No option correct | `None of the above` |
+| Two specific options | `Both A and B` |
+| Neither of two options | `Neither A nor B` |
+| Multiple specific options | `A, B, and C` |
+
+Use capital letters matching the option keys. Never use "all of these", "none of these", "b and c", or other variants.
+
 **Answer formats:**
 - `singleChoice` — `answer: b`
 - `multiChoice` — `answer: abc` (concatenated keys, no separator)

@@ -30,6 +30,8 @@ The course reference is the first token and may be either `{course-id}` (direct)
 - **prerequisites** – prior knowledge required. Default to none if not specified.
 - **exam** – whether this is for a specific exam/cert, and whether the user only cares about passing vs. deep learning. Default to null if not specified.
 
+**Group prefix validation (when `course-ref` contains `/`):** Before anything else, check that `courseData/{course-ref}/syllabus.md` exists. If it does not, search `courseData/` for any directory named `{course-id}` (the leaf slug) that contains a `syllabus.md`. If found at a different path, stop and say: *"Syllabus found at `courseData/{actual-path}/syllabus.md`, not `courseData/{course-ref}/`. Use that path? (yes / no)"* — and use the confirmed path for all subsequent reads and writes. If not found anywhere, treat as a new course.
+
 **For existing courses, check the state:**
 1. Check if `courseData/{course-ref}/syllabus.md` exists
 2. Determine the mode:
@@ -38,6 +40,22 @@ The course reference is the first token and may be either `{course-id}` (direct)
    - **Complete**: all subtopic files exist → ask if user wants to regenerate specific topics or refine
 
 If any required input is ambiguous or missing, ask the user before proceeding.
+
+---
+
+### Domain Detection
+
+After extracting the subject, check whether it matches a known domain in `docs/domains/`:
+
+| Domain file | Key signals |
+|-------------|-------------|
+| `foreign-language.md` | language name (French, Spanish, Japanese…), CEFR level (A1–C2), grammar, vocabulary, conjugation, HSK, JLPT, DELE, DELF |
+| `exam-prep.md` | exam, certification, test, GCSE, A-level, IELTS, TOEFL, AWS cert, GMAT, GRE, revision, past paper |
+| `media-studies.md` | media, film, cinema, journalism, semiotics, representation, audience, ideology, broadcasting |
+
+If the subject matches, read the domain file and prompt: *"This looks like a **{domain}** course — apply {domain} guidelines? (yes / no)"*
+
+If confirmed: all rules in that file override base behavior for scope validation, course ID format, syllabus design, content guidelines, question guidelines, and tags. Append the domain file's **Subagent Instructions** section to every subagent prompt.
 
 ---
 

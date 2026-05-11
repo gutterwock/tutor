@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 /**
- * Ingest courseData/ into the API server.
+ * Ingest course content into the API server.
  *
- * Supports both markdown (.md) and legacy JSON course formats.
- * Markdown is the primary format produced by /generate-course.
+ * Supports three source formats:
+ *   - course-generator: courses/{group}/{course-id}/ with nested topic/subtopic dirs
+ *   - tutor markdown:   courseData/{course-id}/ with flat subtopic .md files (legacy primary)
+ *   - tutor JSON:       courseData/{course-id}/ with legacy JSON files
+ *
+ * Format is auto-detected per course: if the parsed syllabus has no subtopics defined
+ * and topic subdirectories exist, course-generator format is assumed.
  *
  * Usage:
  *   node scripts/ingest.js                  # ingest all courses
- *   node scripts/ingest.js aws-security-specialty
- *   node scripts/ingest.js aws-security-specialty japanese-phonetics
+ *   node scripts/ingest.js spanish-a1
+ *   node scripts/ingest.js spanish/spanish-a1
  *
  * Options:
  *   --base-url <url>       API server base URL (default: http://localhost:3000)
- *   --data-dir <path>      Path to courseData directory (default: ../courseData relative to script)
+ *   --data-dir <path>      Path to courses root (default: ../courseData relative to script)
  *   --dry-run              Print what would be uploaded without making requests
- *   --convert-only         Parse markdown and write JSON to courseData/{id}/converted/ (no upload)
- *   --allow-unreviewed     Skip the default check; allow ingest of courses with unreviewed subtopics
+ *   --convert-only         Parse markdown and write JSON to {courseDir}/converted/ (no upload)
+ *   --allow-unreviewed     Skip the review-marker check for tutor-format courses
  */
 
 const fs = require("fs");
@@ -130,6 +135,9 @@ function isSubtopicReviewed(filePath) {
 
 /** Check if all subtopics in a course have been reviewed. */
 function courseHasUnreviewedSubtopics(courseDir, format, syllabus) {
+	// course-generator format has no review markers; treat all as reviewed
+	if (format === "course-generator") return false;
+
 	const subtopicIds = collectSubtopicIds(syllabus);
 	for (const subtopicId of subtopicIds) {
 		if (format === "md") {
@@ -171,7 +179,10 @@ function courseHasUnreviewedSubtopics(courseDir, format, syllabus) {
  */
 function parseSyllabusMarkdown(source) {
 	const lines = source.split("\n");
-	const course = { id: null, name: null, description: null, prerequisites: [], exam: null, topics: [] };
+	const course = { id: null, name: null, description: null, prerequisites: [], exam: null, metadata: {}, topics: [] };
+
+	// Known scalar field names — anything else at course level goes into metadata
+	const KNOWN_FIELDS = new Set(["id", "description", "exam", "prerequisites", "objectives"]);
 
 	let currentTopic = null;
 	let currentSubtopic = null;
@@ -223,6 +234,15 @@ function parseSyllabusMarkdown(source) {
 			} else if (listTarget === "objectives") {
 				if (currentSubtopic) currentSubtopic.objectives.push(val);
 			}
+		} else if (/^\w[\w-]*:\s/.test(line) && !currentTopic && !currentSubtopic) {
+			// Unknown key: value at course level → store in metadata
+			const colonIdx = line.indexOf(":");
+			const key = line.slice(0, colonIdx).trim();
+			const val = line.slice(colonIdx + 1).trim();
+			if (!KNOWN_FIELDS.has(key)) {
+				course.metadata[key] = val;
+			}
+			listTarget = null;
 		} else if (line.trim() !== "") {
 			// Non-empty, non-list line breaks list context
 			listTarget = null;
@@ -230,6 +250,100 @@ function parseSyllabusMarkdown(source) {
 	}
 
 	return course;
+}
+
+/**
+ * Parse a spec.md file (course-generator format) into a subtopic descriptor.
+ * Returns: { id, name, description, prerequisites, objectives }
+ */
+function parseSpecMarkdown(source) {
+	const lines = source.split("\n");
+	const spec = { id: null, name: null, description: null, prerequisites: [], objectives: [] };
+	let section = null; // "prerequisites" | "objectives" | null
+
+	for (const line of lines) {
+		if (line.startsWith("# ") && !line.startsWith("## ")) {
+			spec.name = line.slice(2).trim();
+			section = null;
+		} else if (line.startsWith("## ")) {
+			const heading = line.slice(3).trim().toLowerCase();
+			section = heading === "objectives" ? "objectives" : "other";
+		} else if (/^id:\s/.test(line)) {
+			spec.id = line.slice(line.indexOf(":") + 1).trim();
+			section = null;
+		} else if (/^description:\s/.test(line)) {
+			spec.description = line.slice(line.indexOf(":") + 1).trim();
+			section = null;
+		} else if (line.trim() === "prerequisites:") {
+			section = "prerequisites";
+		} else if (line.startsWith("- ") && section === "prerequisites") {
+			const val = line.slice(2).trim();
+			if (val) spec.prerequisites.push(val);
+		} else if (line.startsWith("- ") && section === "objectives") {
+			spec.objectives.push(line.slice(2).trim());
+		}
+	}
+
+	return spec;
+}
+
+/**
+ * Detect whether a course directory uses course-generator format.
+ * Criteria: the parsed syllabus has no subtopic headings (sub_topics all empty)
+ * AND at least one topic subdirectory exists.
+ */
+function isCourseGeneratorFormat(courseDir, syllabus) {
+	const hasSyllabusSubtopics = (syllabus.topics ?? []).some((t) => (t.sub_topics ?? []).length > 0);
+	if (hasSyllabusSubtopics) return false;
+	const firstTopic = syllabus.topics?.[0];
+	if (!firstTopic?.id) return false;
+	return fs.existsSync(path.join(courseDir, firstTopic.id));
+}
+
+/**
+ * For course-generator format: scan topic subdirectories to discover subtopics,
+ * reading spec.md from each subtopic dir to get name/description/prerequisites.
+ * Returns an updated topics array with sub_topics populated.
+ */
+function discoverSubtopicsFromDirs(courseDir, topics) {
+	return topics.map((topic) => {
+		const topicDir = path.join(courseDir, topic.id);
+		if (!fs.existsSync(topicDir)) {
+			warn(`  Topic dir not found: ${topicDir}`);
+			return { ...topic, sub_topics: [] };
+		}
+
+		const entries = fs.readdirSync(topicDir).filter((e) => {
+			return !e.startsWith(".") && fs.statSync(path.join(topicDir, e)).isDirectory();
+		});
+
+		// Sort numerically by the last dotted segment (e.g. "spanish-a1.1.3" → 3)
+		entries.sort((a, b) => {
+			const numA = parseInt(a.split(".").pop(), 10);
+			const numB = parseInt(b.split(".").pop(), 10);
+			return (isNaN(numA) ? 0 : numA) - (isNaN(numB) ? 0 : numB);
+		});
+
+		const sub_topics = entries.map((dirName) => {
+			const subtopicDir = path.join(topicDir, dirName);
+			const specFile = path.join(subtopicDir, "spec.md");
+
+			if (fs.existsSync(specFile)) {
+				const spec = parseSpecMarkdown(fs.readFileSync(specFile, "utf8"));
+				return {
+					id: spec.id || dirName,
+					name: spec.name || dirName,
+					description: spec.description ?? null,
+					prerequisites: spec.prerequisites,
+				};
+			}
+
+			// Fallback if no spec.md
+			return { id: dirName, name: dirName, description: null, prerequisites: [] };
+		});
+
+		return { ...topic, sub_topics };
+	});
 }
 
 /**
@@ -569,7 +683,13 @@ function buildQuestionRecord(block, syllabusId) {
 // ---------------------------------------------------------------------------
 
 /**
- * Load syllabus from .md or .json and return the parsed object.
+ * Load syllabus from .md or .json and return the parsed object + detected format.
+ *
+ * Formats:
+ *   "course-generator" — 2-level syllabus.md (course + topics); subtopics in nested dirs
+ *   "md"               — 3-level syllabus.md (course + topics + subtopics)
+ *   "json"             — legacy syllabus.json
+ *
  * Returns null if no syllabus file found.
  */
 function loadSyllabus(courseDir, displayName) {
@@ -577,7 +697,12 @@ function loadSyllabus(courseDir, displayName) {
 	const jsonFile = path.join(courseDir, "syllabus.json");
 
 	if (fs.existsSync(mdFile)) {
-		return { syllabus: parseSyllabusMarkdown(fs.readFileSync(mdFile, "utf8")), format: "md" };
+		const syllabus = parseSyllabusMarkdown(fs.readFileSync(mdFile, "utf8"));
+		if (isCourseGeneratorFormat(courseDir, syllabus)) {
+			syllabus.topics = discoverSubtopicsFromDirs(courseDir, syllabus.topics ?? []);
+			return { syllabus, format: "course-generator" };
+		}
+		return { syllabus, format: "md" };
 	}
 	if (fs.existsSync(jsonFile)) {
 		return { syllabus: readJson(jsonFile), format: "json" };
@@ -589,9 +714,23 @@ function loadSyllabus(courseDir, displayName) {
 
 /**
  * Load content and question records for a subtopic.
- * Prefers {subtopicId}.md; falls back to content/{subtopicId}.json + questions/{subtopicId}.json.
+ *
+ * course-generator: subtopic.md lives at {courseDir}/{topicId}/{subtopicId}/subtopic.md
+ * tutor md:         flat file at {courseDir}/{subtopicId}.md
+ * tutor json:       {courseDir}/content/{subtopicId}.json + questions/{subtopicId}.json
  */
 function loadSubtopic(courseDir, subtopicId, format) {
+	if (format === "course-generator") {
+		// Derive topicId by dropping the last dotted segment: "spanish-a1.1.2" → "spanish-a1.1"
+		const topicId = subtopicId.substring(0, subtopicId.lastIndexOf("."));
+		const subtopicFile = path.join(courseDir, topicId, subtopicId, "subtopic.md");
+		if (!fs.existsSync(subtopicFile)) {
+			warn(`  No subtopic.md for ${subtopicId} — skipping`);
+			return null;
+		}
+		return parseSubtopicMarkdown(fs.readFileSync(subtopicFile, "utf8"));
+	}
+
 	const mdFile = path.join(courseDir, `${subtopicId}.md`);
 
 	if (format === "md" || fs.existsSync(mdFile)) {
@@ -826,7 +965,7 @@ async function ingestCourse(courseDir, displayName) {
 	if (!loaded) return;
 	const { syllabus, format } = loaded;
 
-	log(`  format: ${format}`);
+	log(`  format: ${format}${Object.keys(syllabus.metadata ?? {}).length > 0 ? `  metadata: ${JSON.stringify(syllabus.metadata)}` : ""}`);
 
 	// Check for unreviewed subtopics if not allowing them
 	if (!allowUnreviewed && courseHasUnreviewedSubtopics(courseDir, format, syllabus)) {
@@ -842,6 +981,9 @@ async function ingestCourse(courseDir, displayName) {
 	for (const subtopicId of subtopicIds) {
 		const subtopic = loadSubtopic(courseDir, subtopicId, format);
 		if (!subtopic) continue;
+		// course-generator subtopic.md files have no syllabus_id: header — inject it
+		subtopic.content.forEach((r) => { if (!r.syllabus_id) r.syllabus_id = subtopicId; });
+		subtopic.questions.forEach((r) => { if (!r.syllabus_id) r.syllabus_id = subtopicId; });
 		// Content must be uploaded first; returned IDs are used to resolve content_ids on questions.
 		const contentIds = await uploadContent(subtopic.content, subtopicId);
 		await uploadQuestions(subtopic.questions, subtopicId, contentIds);

@@ -10,7 +10,7 @@ async function replaceBaseQuestions(syllabusId, rows) {
 	// Attach deterministic IDs (content_ids already resolved to real UUIDs by the controller)
 	const rowsWithIds = rows.map((row) => ({
 		...row,
-		id: questionId(row.syllabus_id, row.question_text, row.answer, row.content_ids ?? [], row.passage ?? null),
+		id: questionId(row.syllabus_id, row.question_text, row.answer, row.content_ids ?? [], row.passage ?? null, row.options ?? null),
 	}));
 
 	const client = await pool.connect();

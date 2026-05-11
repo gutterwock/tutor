@@ -4,12 +4,13 @@ const pool = require("../config/db");
  * Upsert a single syllabus row. Skips update if checksum matches.
  */
 async function upsertRow(row) {
-	const { id, parent_id, level, name, description, prerequisites, exam, sort_order, checksum, embedding } = row;
+	const { id, parent_id, level, name, description, prerequisites, exam, metadata, sort_order, checksum, embedding } = row;
 	// Ensure exam is serialized as JSON string so pg doesn't pass a bare string to JSONB
 	const examJson = exam == null ? null : (typeof exam === "string" ? JSON.stringify(exam) : exam);
+	const metadataJson = metadata == null ? "{}" : (typeof metadata === "string" ? metadata : JSON.stringify(metadata));
 	const result = await pool.query(
-		`INSERT INTO syllabus (id, parent_id, level, name, description, prerequisites, exam, sort_order, checksum, embedding)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO syllabus (id, parent_id, level, name, description, prerequisites, exam, metadata, sort_order, checksum, embedding)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 ON CONFLICT (id) DO UPDATE
 		   SET parent_id     = EXCLUDED.parent_id,
 		       level         = EXCLUDED.level,
@@ -17,13 +18,14 @@ async function upsertRow(row) {
 		       description   = EXCLUDED.description,
 		       prerequisites = EXCLUDED.prerequisites,
 		       exam          = EXCLUDED.exam,
+		       metadata      = EXCLUDED.metadata,
 		       sort_order    = EXCLUDED.sort_order,
 		       checksum      = EXCLUDED.checksum,
 		       embedding     = EXCLUDED.embedding
 		   WHERE syllabus.checksum IS DISTINCT FROM EXCLUDED.checksum
 		 RETURNING id`,
 		[id, parent_id ?? null, level, name, description ?? null,
-			prerequisites ?? [], examJson, sort_order ?? 0, checksum ?? null,
+			prerequisites ?? [], examJson, metadataJson, sort_order ?? 0, checksum ?? null,
 			embedding ?? null]
 	);
 	return result.rowCount > 0;

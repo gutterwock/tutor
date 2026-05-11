@@ -46,8 +46,9 @@ async function gradeFreeText(questionText, expectedAnswer, userAnswer) {
 		`  3 = mostly correct with minor issues\n` +
 		`  4 = fully correct\n\n` +
 		`Question: ${questionText}\n` +
-		`Grading rubric (the answer should look something like this, OR cover these key points): ${JSON.stringify(expectedAnswer)}\n` +
+		`Grading rubric (identifies the key concepts and criteria for a correct answer — use it to understand what matters, not as a template to match): ${JSON.stringify(expectedAnswer)}\n` +
 		`Student response: ${JSON.stringify(userAnswer)}\n\n` +
+		`Grade based on whether the student's answer is correct for the question. Give full credit if the answer is accurate, even if phrased differently from the rubric. Penalise genuine errors or missing understanding, not surface differences.\n` +
 		`Respond with JSON only. Example: {"correctness": 3}`;
 
 	const raw = await callAI(prompt);

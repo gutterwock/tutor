@@ -149,6 +149,9 @@ prompt/         Schema reference and API endpoint definitions for AI context
 | POST | `/generate-adaptive` | Trigger background adaptive content+question generation for a subtopic (`{ user_id, subtopic_id }`) |
 | GET | `/queue` | Fetch items from the tier queue (`?user_id=&course_ids=id1,id2&limit=10&question_only=true`) |
 | DELETE | `/queue/:id` | Consume one queue item; records content view server-side for content items |
+| PATCH | `/queue/:id` | Set priority of a queue item (`{ priority: number }`) |
+| POST | `/queue/set-tier` | Set all items in a subtopic/topic to target tier (`{ user_id, subtopic_id or topic_id, target_tier, item_type? }`) |
+| GET | `/queue/tier-counts` | Get item counts per tier for a user+course (`?user_id=&course_id=`) |
 | GET | `/content/:id` | Fetch a single content item by UUID |
 | GET/POST | `/content` | Fetch / upload learning material |
 | POST | `/content/adaptive` | Persist Claude-generated adaptive content (`base_content=false`) |
@@ -178,7 +181,7 @@ Timestamps are 13-digit epoch milliseconds (BIGINT). Syllabus IDs use slug hiera
 
 `graded_at` is set by the cron or the `grade-ai` endpoint, on `freeText` responses. It is NULL on insert and used to detect ungraded responses (as opposed to responses correctly scored 0). The cron acts as a fallback for any responses not graded in real-time.
 
-`study_queue` is a **persistent tier-based queue** — all items for a user's enrolled courses live here permanently (never deleted except on unenroll). Priority is a plain integer encoding five tiers: -1=locked, 0–99=tier0 (mastered), 100–199=tier1, 200–299=tier2, 300–399=tier3 (new/just-unlocked), 400–499=tier4 (failed/needs work). Items are fetched with `ORDER BY priority DESC` — higher priority = shown sooner. On enroll, all items are inserted at -1 (locked); the first subtopic's items are promoted to tier 3 immediately. Subsequent subtopics are unlocked by the pipeline after the previous one is completed. Full item bodies (body/question_text/options/answer) are fetched in bulk by `GET /queue` via JOIN — no secondary per-item fetch needed.
+`study_queue` is a **persistent tier-based queue** — all items for a user's enrolled courses live here permanently (never deleted except on unenroll). Priority is a plain integer: 0=locked, 1=jail (mastered but never shown), 2–4=mastered (circulates 4→3→2→4 on success), 5–53=revision-bottom, 54–103=revision-middle, 104–153=revision-top, 154–253=new, 254=failed-question, 255=failed-prereq-content. Items are fetched with `ORDER BY priority DESC` — higher priority = shown sooner; jail items (priority 1) are never fetched. On enroll, all items are inserted at 0 (locked); the first subtopic's items are promoted to 154–253 immediately. Subsequent subtopics are unlocked by the pipeline after the previous one is completed. Full item bodies are fetched in bulk by `GET /queue` via JOIN — no secondary per-item fetch needed.
 
 ### Course Data (`courseData/`)
 
@@ -229,7 +232,7 @@ Every subtopic must have records in all three phases.
 ### What is built
 
 **Course authoring** — fully working end-to-end:
-- Claude Code skills (`/generate-course`, `/generate-language-course`, `/generate-program`) generate `courseData/` markdown files
+- Claude Code skills (`/generate-course`, `/generate-program`) generate `courseData/` markdown files
 - Both direct (`courseData/{course-id}/`) and grouped (`courseData/{group}/{course-id}/`) layouts supported
 - Database schema models all entities including adaptive content (`base_content: false`), performance tracking, and content unlocking (`active` flag)
 
@@ -304,6 +307,19 @@ App settings (stored in `app/.settings.json`):
 - Content view tracking server-side: `DELETE /queue/:id` upserts `content_view` + calls `promoteGatedQuestions`
 - Idempotent inserts: `ON CONFLICT (user_id, item_type, item_id) DO NOTHING`
 
+**Course review workflow** — three-phase gate:
+- **Phase 1: Generate** — `/aws-generate` or `/generate-course` creates course markdown files in `courseData/`
+- **Phase 2: Review + Fix + Stamp subtopics** — Can be local or AWS batch:
+  - Script validation (`node scripts/review-courses.js`) — **must reach 0 errors before proceeding**. Structural errors (invalid answer keys, missing options, ordering mismatches) come from generation bugs and are not in AWS review findings; fix manually or via `/apply-fixes`.
+  - AI content review (Sonnet for factual accuracy, Haiku for question quality)
+  - Apply fixes to issues found
+  - **Stamp each subtopic** with `reviewed: YYYY-MM-DD` (gates ingest; allows per-subtopic ingestion)
+- **Phase 3: Learner-sim + Stamp syllabus** — Sequential context review:
+  - Script validation again — **must reach 0 errors before proceeding**. Errors here were missed in Phase 2 and must be fixed before the learner-sim runs.
+  - Simulate learner reading all subtopics for each topic in order (catches forward references, ordering issues, `show_with_content` correctness)
+  - **Stamp the syllabus** with `reviewed: YYYY-MM-DD` (gates course as complete)
+- Ingest gated by subtopic review status: `node scripts/ingest.js --allow-unreviewed` to override
+
 ### What is not built
 
 - **Cloud AI dispatch** — `services/ai.js` has a TODO stub; only local `claude` subprocess works
@@ -374,8 +390,7 @@ Each axis is independent:
 
 Located in `.claude/commands/`:
 
-- **`/generate-course`** — Generate a structured course (syllabus → content → questions). Supports new courses, resume, regenerate specific topics, and revise syllabus. Subject scope limit: ~10 topics, ~60 subtopics, ~1000 content/question records. Course ref may be `course-id` or `group/course-id`.
-- **`/generate-language-course`** — Language-learning specialization of `/generate-course`.
+- **`/generate-course`** — Generate a structured course (syllabus → content → questions). Supports new courses, resume, regenerate specific topics, and revise syllabus. Courses can be small or large — typical scope is ~10 topics, ~60 subtopics, ~1000 content/question records, but these are soft guidelines. Confirm with the user before proceeding with unusually large courses. Course ref may be `course-id` or `group/course-id`. Auto-detects domain (`foreign-language`, `media-studies`, `exam-prep`) from the course subject and applies domain-specific guidelines from `docs/domains/`.
 - **`/generate-program`** — Plan a multi-course learning program. Writes `courseData/{program-id}/program.md` — the program-id becomes the group folder. Produces an ordered sequence of courses for a learning goal; does not generate course content itself. Use the output as input for `/generate-course {program-id}/{course-id}`.
 
 Resume syntax examples:

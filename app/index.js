@@ -11,11 +11,12 @@ const ID_FILE = path.join(__dirname, ".user_id");
 const SETTINGS_FILE = path.join(__dirname, ".settings.json");
 
 const DEFAULT_SETTINGS = {
-	disabled_courses: [],       // course IDs temporarily excluded from course picker
-	session_size: 10,           // items per session (min 5); also used as limit per tier in fetch
-	review_pct: 30,             // % of session drawn from review tiers (0/1/2); rest from tier 3 (new)
-	tier4_as_review: false,     // treat tier 4 (failed) items as review rather than new
-	last_selected_courses: [],  // last course IDs chosen at session start; used as default
+	disabled_courses: [],            // course IDs temporarily excluded from course picker
+	session_size: 10,                // items per session (min 5); also used as limit per tier in fetch
+	review_pct: 30,                  // % of session drawn from revision/mastered bands; rest from new (154-253) + failed (254-255)
+	tier4_as_review: false,          // treat failed items (254-255) as review rather than new
+	review_questions_only: false,    // review band (1-153): show questions only; 254/255 pairs always shown as-is; associated content consumed silently when question is answered
+	last_selected_courses: [],       // last course IDs chosen at session start; used as default
 };
 
 // ── persistence ───────────────────────────────────────────────────────────────
@@ -123,13 +124,23 @@ function progressBar(completed, total, width = 20) {
 
 /**
  * Given the flat tiered fetch result, compose a session of `sessionSize` items.
- * reviewPct (0–100) controls what fraction comes from review tiers (0/1/2 and optionally 4).
- * Tier 3 = new items. If one bucket is short, the other fills the remainder.
- * Final order: randomly interleaved across tiers, priority DESC preserved within each tier.
+ * reviewPct (0–100) controls what fraction comes from revision/mastered bands (1–153).
+ * New band (154–253) + failed (254–255) = new bucket unless tier4AsReview is on.
+ * If one bucket is short, the other fills the remainder.
+ * Final order: randomly interleaved across bands, priority DESC preserved within each band.
  */
-function composeSession(items, sessionSize, reviewPct, tier4AsReview = false) {
-	const newItems    = items.filter((i) => tier4AsReview ? (i.priority >= 300 && i.priority < 400) : i.priority >= 300).sort((a, b) => b.priority - a.priority);
-	const reviewItems = items.filter((i) => i.priority >= 0 && (i.priority < 300 || (tier4AsReview && i.priority >= 400))).sort((a, b) => b.priority - a.priority);
+function composeSession(items, sessionSize, reviewPct, tier4AsReview = false, reviewQuestionsOnly = false) {
+	// new bucket: 154+ (includes failed 254-255), or just 154-253 when tier4AsReview=true
+	const newItems    = items.filter((i) => tier4AsReview ? (i.priority >= 154 && i.priority <= 253) : i.priority >= 154).sort((a, b) => b.priority - a.priority);
+	// review bucket: 1-153 (revision + mastered), plus 254-255 when tier4AsReview=true
+	// reviewQuestionsOnly filters content from the 1-153 band; 254/255 pairs are always included as-is
+	const reviewItems = items.filter((i) => {
+		if (i.priority <= 0) return false;
+		if (i.priority >= 254) return tier4AsReview;
+		if (i.priority > 153) return false;
+		if (reviewQuestionsOnly && i.item_type !== "question") return false;
+		return true;
+	}).sort((a, b) => b.priority - a.priority);
 
 	const targetNew    = Math.max(0, Math.floor(sessionSize * (1 - reviewPct / 100)));
 	const targetReview = sessionSize - targetNew;
@@ -148,16 +159,16 @@ function composeSession(items, sessionSize, reviewPct, tier4AsReview = false) {
 		chosen.push(...newItems.slice(targetNew, targetNew + gap));
 	}
 
-	// Group into per-tier buckets sorted by priority DESC (preserves within-tier order)
+	// Group into per-band buckets sorted by priority DESC (preserves within-band order)
 	const tierMap = new Map();
 	for (const item of chosen) {
-		const tier = Math.floor(item.priority / 100);
-		if (!tierMap.has(tier)) tierMap.set(tier, []);
-		tierMap.get(tier).push(item);
+		const band = priorityBand(item.priority);
+		if (!tierMap.has(band)) tierMap.set(band, []);
+		tierMap.get(band).push(item);
 	}
 	const buckets = [...tierMap.values()].map((b) => b.sort((a, b) => b.priority - a.priority));
 
-	// Randomly interleave across tiers: pick a random non-empty bucket at each step
+	// Randomly interleave across bands: pick a random non-empty bucket at each step
 	const result = [];
 	while (buckets.some((b) => b.length > 0)) {
 		const nonEmpty = buckets.filter((b) => b.length > 0);
@@ -167,15 +178,25 @@ function composeSession(items, sessionSize, reviewPct, tier4AsReview = false) {
 	return result;
 }
 
+function priorityBand(priority) {
+	if (priority >= 254) return 6; // failed
+	if (priority >= 154) return 5; // new
+	if (priority >= 104) return 4; // rev top
+	if (priority >= 54)  return 3; // rev mid
+	if (priority >= 4)   return 2; // rev bot
+	return 1;                       // mastered (1-3)
+}
+
 // ── settings menu ─────────────────────────────────────────────────────────────
 
 async function settingsMenu(settings) {
 	while (true) {
 		clear();
 		console.log("Settings\n");
-		console.log(`  1.  Session size      [${settings.session_size} items]  — items shown per session (min 5)`);
-		console.log(`  2.  Review %          [${settings.review_pct}%]  — portion of session from review tiers (0=all new, 100=all review)`);
-		console.log(`  3.  Tier 4 as review  [${settings.tier4_as_review ? "on" : "off"}]  — treat failed items as review rather than new`);
+		console.log(`  1.  Session size         [${settings.session_size} items]  — items shown per session (min 5)`);
+		console.log(`  2.  Review %             [${settings.review_pct}%]  — portion of session from revision/mastered bands (0=all new, 100=all revision)`);
+		console.log(`  3.  Failed as review     [${settings.tier4_as_review ? "on" : "off"}]  — treat failed items (254-255) as review rather than new`);
+		console.log(`  4.  Review questions only  [${settings.review_questions_only ? "on" : "off"}]  — review band shows questions only; associated content consumed silently`);
 		console.log("\n  b.  Back");
 
 		const input = (await ask("\n> ")).trim().toLowerCase();
@@ -201,6 +222,9 @@ async function settingsMenu(settings) {
 			}
 		} else if (input === "3") {
 			settings.tier4_as_review = !settings.tier4_as_review;
+			saveSettings(settings);
+		} else if (input === "4") {
+			settings.review_questions_only = !settings.review_questions_only;
 			saveSettings(settings);
 		} else if (input === "b" || input === "") {
 			return;
@@ -244,11 +268,11 @@ async function showCourseProgress(userId, course, settings) {
 			api("GET", `/queue/tier-counts?user_id=${userId}&course_id=${encodeURIComponent(course.id)}`).catch(() => null),
 		]);
 
-		const total = tiers ? (tiers.locked + tiers.tier0 + tiers.tier1 + tiers.tier2 + tiers.tier3 + tiers.tier4) : 0;
-		const mastered = tiers ? (tiers.tier0 + tiers.tier1 + tiers.tier2) : 0;
+		const total = tiers ? (tiers.locked + tiers.mastered + tiers.revision + tiers.new_items + tiers.failed) : 0;
+		const studied = tiers ? (tiers.mastered + tiers.revision + tiers.failed) : 0;
 
 		console.log(`\n  ${course.name}  (${progress.completed} / ${progress.total} subtopics)`);
-		if (tiers) console.log(`  Items in tiers 0/1/2: ${mastered} / ${total}`);
+		if (tiers) console.log(`  Progress: ${studied} / ${total} items`);
 		hr();
 
 		for (const topic of progress.topics) {
@@ -305,20 +329,28 @@ async function manageCoursesMenu(userId, settings) {
 		if (enrolled.length === 0) {
 			console.log("  Not enrolled in any courses yet.\n");
 		} else {
-			const progresses = await Promise.all(
-				enrolled.map((c) =>
+			const [progresses, tiersList] = await Promise.all([
+				Promise.all(enrolled.map((c) =>
 					api("GET", `/course-progress?user_id=${userId}&course_id=${encodeURIComponent(c.id)}`)
 						.catch(() => ({ completed: 0, total: 0 }))
-				)
-			);
+				)),
+				Promise.all(enrolled.map((c) =>
+					api("GET", `/queue/tier-counts?user_id=${userId}&course_id=${encodeURIComponent(c.id)}`)
+						.catch(() => null)
+				)),
+			]);
 
 			enrolled.forEach((c, i) => {
 				const paused = settings.disabled_courses.includes(c.id);
 				const { completed, total } = progresses[i];
 				const bar  = progressBar(completed, total);
 				const frac = `${completed} / ${total}`;
+				const t = tiersList[i];
+				const totalItems    = t ? (t.locked + t.mastered + t.revision + t.new_items + t.failed) : null;
+				const studied      = t ? (t.mastered + t.revision + t.failed) : null;
+				const itemsStr = t ? `  ${studied} / ${totalItems} items` : "";
 				console.log(`  ${i + 1}.  [${paused ? "paused" : "active"}]  ${c.name}`);
-				console.log(`       ${bar}  ${frac}`);
+				console.log(`       ${bar}  ${frac} subtopics${itemsStr}`);
 			});
 
 			console.log("\n  Select a number to view details.");
@@ -442,7 +474,9 @@ async function askQuestion(data) {
 		console.log(formatOptions(shuffledOptions) + "\n");
 		let input;
 		while (true) {
-			input = (await ask("Answer: ")).trim().toLowerCase();
+			input = (await ask("Answer: ")).trim();
+			if (input.toUpperCase() === "JAIL!") return { sendToJail: true };
+			input = input.toLowerCase();
 			if (input && validKeys.includes(input)) break;
 			console.log(`  Enter one of: ${validKeys.join(", ")}`);
 		}
@@ -465,8 +499,10 @@ async function askQuestion(data) {
 		console.log(formatOptions(shuffledOptions) + "\n");
 		let parts;
 		while (true) {
-			const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim().toLowerCase();
-			parts = input.split(",").map((s) => s.trim()).filter(Boolean);
+			const input = (await ask("Answer (comma-separated, e.g. a,c): ")).trim();
+			if (input.toUpperCase() === "JAIL!") return { sendToJail: true };
+			const lowerInput = input.toLowerCase();
+			parts = lowerInput.split(",").map((s) => s.trim()).filter(Boolean);
 			if (parts.length > 0 && parts.every((k) => validKeys.includes(k))) break;
 			console.log(`  Enter one or more of: ${validKeys.join(", ")}`);
 		}
@@ -489,6 +525,7 @@ async function askQuestion(data) {
 		let input;
 		while (true) {
 			input = (await ask("Answer: ")).trim();
+			if (input.toUpperCase() === "JAIL!") return { sendToJail: true };
 			if (input) break;
 			console.log("  Please enter an answer.");
 		}
@@ -516,8 +553,10 @@ async function askQuestion(data) {
 		console.log(formatOptions(shuffledOptions) + "\n");
 		let parts;
 		while (true) {
-			const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim().toLowerCase();
-			parts = input.split(",").map((s) => s.trim()).filter(Boolean);
+			const input = (await ask("Order (comma-separated, e.g. b,d,a,c): ")).trim();
+			if (input.toUpperCase() === "JAIL!") return { sendToJail: true };
+			const lowerInput = input.toLowerCase();
+			parts = lowerInput.split(",").map((s) => s.trim()).filter(Boolean);
 			if (parts.length === validKeys.length && parts.every((k) => validKeys.includes(k))) break;
 			console.log(`  Enter all ${validKeys.length} keys in order: ${validKeys.join(", ")}`);
 		}
@@ -542,6 +581,7 @@ async function askQuestion(data) {
 		let input;
 		while (true) {
 			input = await ask("Answer: ");
+			if (input.trim().toUpperCase() === "JAIL!") return { sendToJail: true };
 			if (input.trim()) break;
 			console.log("  Please enter an answer.");
 		}
@@ -576,8 +616,20 @@ async function studySession(userId, settings, questionOnly = false) {
 		return;
 	}
 
-	const tier4AsReview = settings.tier4_as_review ?? false;
-	const items = composeSession(rawItems, sessionSize, reviewPct, tier4AsReview);
+	const tier4AsReview       = settings.tier4_as_review ?? false;
+	const reviewQuestionsOnly = settings.review_questions_only ?? false;
+
+	// Map content item_id → queue id for silent consumption when reviewQuestionsOnly is on
+	const contentQueueMap = {};
+	if (reviewQuestionsOnly) {
+		for (const raw of rawItems) {
+			if (raw.item_type === "content" && raw.priority >= 1 && raw.priority <= 153) {
+				contentQueueMap[raw.item_id] = raw.id;
+			}
+		}
+	}
+
+	const items = composeSession(rawItems, sessionSize, reviewPct, tier4AsReview, reviewQuestionsOnly);
 
 	if (!items.length) {
 		console.log("\nYour queue is empty — nothing due right now.\n");
@@ -585,7 +637,7 @@ async function studySession(userId, settings, questionOnly = false) {
 		return;
 	}
 
-	const hasReview = items.some((i) => i.priority >= 0 && (i.priority < 300 || (tier4AsReview && i.priority >= 400)));
+	const hasReview = items.some((i) => i.priority > 0 && (i.priority <= 153 || (tier4AsReview && i.priority >= 254)));
 	console.log(`\n${items.length} item${items.length > 1 ? "s" : ""} in session${hasReview ? " (includes review)" : ""}`);
 	await pause();
 
@@ -605,43 +657,62 @@ async function studySession(userId, settings, questionOnly = false) {
 
 		} else {
 			hr();
-			let { correctness, userAnswer, needsAiGrading } = await askQuestion(data);
-			const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
-			if (data.question_type !== "freeText" && !needsAiGrading) submitBody.correctness = correctness;
-			const submitted = await api("POST", "/responses", submitBody);
+			let result = await askQuestion(data);
 
-			if (submitted.needs_grading) {
-				console.log("\n  Grading...");
-				const graded = await api(
-					"POST", `/responses/${submitted.id}/grade-ai`, { user_id: userId }
-				).catch(() => null);
-				if (graded) {
-					const labels = ["Wrong", "Mostly wrong", "Partial", "Mostly correct", "Correct"];
-					console.log(`  Grade: ${graded.correctness}/4 — ${labels[graded.correctness] ?? "?"}`);
-					if (data.answer) {
-						const answerLabel = data.question_type === "exactMatch" ? "Accepted" : "Example answer";
-						const answerText = Array.isArray(data.answer) ? data.answer.join(" / ") : data.answer;
-						console.log(`\n  ${answerLabel}: ${convertLatexToAsciiMath(answerText)}`);
-					}
-					if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
-					correctness = graded.correctness;
-				} else {
-					console.log("  (Grading failed — marked as incorrect.)");
-					correctness = 0;
-					await api("PATCH", `/responses/${submitted.id}/grade`, { user_id: userId, correctness: 0 }).catch(() => {});
-				}
-				await pause();
+			if (result.sendToJail) {
+				// Send to jail silently
+				await api("PATCH", `/queue/${item.id}`, { priority: 1 }).catch(() => {});
 			} else {
-				await pause();
-			}
+				let { correctness, userAnswer, needsAiGrading } = result;
+				const submitBody = { question_id: data.id, user_id: userId, user_answer: userAnswer };
+				if (data.question_type !== "freeText" && !needsAiGrading) submitBody.correctness = correctness;
+				const submitted = await api("POST", "/responses", submitBody);
 
-			await api("DELETE", `/queue/${item.id}`).catch(() => {});
+				if (submitted.needs_grading) {
+					console.log("\n  Grading...");
+					const graded = await api(
+						"POST", `/responses/${submitted.id}/grade-ai`, { user_id: userId }
+					).catch(() => null);
+					if (graded) {
+						const labels = ["Wrong", "Mostly wrong", "Partial", "Mostly correct", "Correct"];
+						console.log(`  Grade: ${graded.correctness}/4 — ${labels[graded.correctness] ?? "?"}`);
+						if (data.answer) {
+							const answerLabel = data.question_type === "exactMatch" ? "Accepted" : "Example answer";
+							const answerText = Array.isArray(data.answer) ? data.answer.join(" / ") : data.answer;
+							console.log(`\n  ${answerLabel}: ${convertLatexToAsciiMath(answerText)}`);
+						}
+						if (data.explanation) console.log(`\n  ${convertLatexToAsciiMath(data.explanation)}`);
+						correctness = graded.correctness;
+					} else {
+						console.log("  (Grading failed — marked as incorrect.)");
+						correctness = 0;
+						await api("PATCH", `/responses/${submitted.id}/grade`, { user_id: userId, correctness: 0 }).catch(() => {});
+					}
+					await pause();
+				} else {
+					await pause();
+				}
 
-			if (data.question_type !== "freeText") {
-				if (correctness === 4) correct++;
-				total++;
+				await api("DELETE", `/queue/${item.id}`).catch(() => {});
+
+					// When review_questions_only is on, silently consume any associated content items
+					// that were filtered from the session so they progress through tiers normally
+					if (reviewQuestionsOnly && item.priority >= 1 && item.priority <= 153) {
+						const contentIds = data.content_ids ?? [];
+						for (const contentItemId of contentIds) {
+							const contentQueueId = contentQueueMap[contentItemId];
+							if (contentQueueId) {
+								await api("DELETE", `/queue/${contentQueueId}`).catch(() => {});
+							}
+						}
+					}
+
+					if (data.question_type !== "freeText") {
+						if (correctness === 4) correct++;
+						total++;
+					}
+				}
 			}
-		}
 	}
 
 	hr();
